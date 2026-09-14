@@ -1,0 +1,5 @@
+[line 6]: Runtime error: Expected 0 arguments but got 2.
+[line 6] in c()
+[line 4] in b()
+[line 3] in a()
+[line 9] in <script>
