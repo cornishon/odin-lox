@@ -2,9 +2,11 @@ package olox
 
 import "core:fmt"
 import "core:io"
+import "core:math"
 import "core:mem"
+import "core:time"
 
-FRAMES_MAX :: 16
+FRAMES_MAX :: 64
 STACK_MAX :: FRAMES_MAX * 256
 
 @(thread_local)
@@ -32,6 +34,23 @@ vm_init :: proc(stdout: io.Writer, allocator := context.allocator) {
 	vm.stdout = stdout
 	table_init(&vm.strings, allocator)
 	table_init(&vm.globals, allocator)
+	reset_stack()
+
+	define_native("clock", 0, proc(args: []Value) -> (Value, bool) {
+		clock := f64(time.tick_now()._nsec) / 1e9
+		return clock, true
+	})
+
+	define_native("sqrt", 1, proc(args: []Value) -> (Value, bool) {
+		if x, is_num := args[0].(f64); is_num && x >= 0 {
+			return math.sqrt(x), true
+		}
+		return 0, runtime_error("Argument must be a non-negative number, but got: %q", args[0])
+	})
+
+	define_native("typeof", 1, proc(args: []Value) -> (Value, bool) {
+		return string_copy(value_type(args[0])), true
+	})
 }
 
 vm_destroy :: proc() {
@@ -49,7 +68,7 @@ vm_destroy :: proc() {
 
 vm_interpret :: proc(source: string) -> bool {
 	function := compile(source) or_return
-	_reset_stack()
+	reset_stack()
 	push(function)
 	vm.frame^ = {
 		function = function,
@@ -73,7 +92,14 @@ run :: proc() -> bool {
 		case .POP:
 			pop_()
 		case .RETURN:
-			return true
+			result := pop_()
+			if vm.frame_count -= 1; vm.frame_count == 0 {
+				pop_()
+				return true
+			}
+			vm.stack_top = vm.frame.slots
+			push(result)
+			vm.frame = &vm.frames[vm.frame_count - 1]
 		case .CONST:
 			push(read_const())
 		case .PRINT:
@@ -100,6 +126,11 @@ run :: proc() -> bool {
 			if table_set(&vm.globals, name, peek(0)) {
 				table_remove(&vm.globals, name)
 				return runtime_error("Undefined variable '%s'", name)
+			}
+		case .CALL:
+			argc := int(read_byte())
+			if !call_value(peek(argc), argc) {
+				return false
 			}
 		case .LOOP:
 			offset := read_short()
@@ -196,11 +227,47 @@ peek :: #force_inline proc "contextless" (distance: int) -> Value {
 	return vm.stack_top[-distance - 1]
 }
 
+call_function :: proc(fun: ^Function, argc: int) -> bool {
+	if argc != fun.arity {
+		return runtime_error("Expected %d arguments but got %d.", fun.arity, argc)
+	}
+	if vm.frame_count == FRAMES_MAX {
+		return runtime_error("Stack overflow.")
+	}
+	vm.frame = &vm.frames[vm.frame_count]
+	vm.frame_count += 1
+	vm.frame^ = {
+		function = fun,
+		ip = raw_data(fun.chunk.code),
+		slots = vm.stack_top[-argc - 1:],
+	}
+	return true
+}
+
+call_value :: proc(callee: Value, argc: int) -> bool {
+	if obj, is_obj := callee.(^Object); is_obj {
+		switch fun in obj.variant {
+		case ^Function:
+			return call_function(fun, argc)
+		case ^Native:
+			if argc != fun.arity {
+				return runtime_error("Expected %d arguments but got %d.", fun.arity, argc)
+			}
+			result := fun.call(vm.stack_top[-argc:0]) or_return
+			vm.stack_top = vm.stack_top[-argc - 1:]
+			push(result)
+			return true
+		case ^String:
+		}
+	}
+	return runtime_error("Can only call functions and classes, but got: %v", callee)
+}
+
 frame_chunk :: #force_inline proc "contextless" () -> ^Chunk {
 	return &vm.frame.function.chunk
 }
 
-_reset_stack :: proc() {
+reset_stack :: proc() {
 	vm.stack_top = &vm.stack[0]
 	vm.frame = &vm.frames[0]
 	vm.frame_count = 0
@@ -210,7 +277,30 @@ runtime_error :: proc(format: string, args: ..any) -> bool {
 	instr := mem.ptr_sub(vm.frame.ip, raw_data(frame_chunk().code)) - 1
 	line := chunk_get_line(frame_chunk(), instr)
 	fmt.eprintf("[line %d]: Runtime error: ", line)
-	fmt.eprintfln(format, args)
-	_reset_stack()
+	fmt.eprintfln(format, ..args)
+
+	#reverse for frame, i in vm.frames[:vm.frame_count] {
+		fun := frame.function
+		instr = mem.ptr_sub(frame.ip, raw_data(fun.chunk.code)) - 1
+		fmt.eprintf("[line %d] in ", chunk_get_line(&fun.chunk, instr))
+		if i == 0 {
+			fmt.eprintln("<script>")
+		} else {
+			fmt.eprintfln("%s()", fun.name)
+		}
+	}
+
+	reset_stack()
 	return false
+}
+
+define_native :: proc(name: string, arity: int, implementation: Native_Fn) {
+	// pushing on to the stack so that GC know we're still using them
+	name := string_copy(name)
+	push(name)
+	impl := native_new(arity, implementation)
+	push(impl)
+	table_set(&vm.globals, name, impl)
+	pop_()
+	pop_()
 }

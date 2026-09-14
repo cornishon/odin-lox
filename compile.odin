@@ -37,6 +37,7 @@ Function_Kind :: enum {
 }
 
 Compiler :: struct {
+	enclosing: ^Compiler,
 	function: ^Function,
 	kind: Function_Kind,
 	locals: [dynamic; 256]Local,
@@ -166,18 +167,18 @@ patch_jump :: proc(offset: int) {
 }
 
 compiler_init :: proc(compiler: ^Compiler, fun_kind: Function_Kind) {
-	compiler^ = {}
+	compiler.enclosing = current
 	compiler.function = function_new(fun_kind == .Script ? "<script>" : parser.previous.text)
 	compiler.kind = fun_kind
-	compiler.identifiers.allocator = context.temp_allocator
 	current = compiler
 	append(&current.locals, Local{})
 }
 
 compiler_end :: proc() -> ^Function {
-	emit(.RETURN)
+	emit(.NIL, .RETURN)
 	function := current.function
-	free_all(context.temp_allocator)
+	table_destroy(&current.identifiers)
+	current = current.enclosing
 	when ODIN_DEBUG {
 		disassemble(&function.chunk, function.name.data)
 	}
@@ -260,6 +261,20 @@ define_variable :: proc(global: u8) {
 	}
 }
 
+argument_list :: proc() -> (arg_count: u8) {
+	for {
+		if check(.Right_Paren) {break}
+		expression()
+		if arg_count == 255 {
+			error("Cant' have more than 255 arguments.")
+		}
+		arg_count += 1
+		if !match(.Comma) {break}
+	}
+	consume(.Right_Paren, "Expected ')' after arguments.")
+	return
+}
+
 and :: proc(can_assign: bool) {
 	end_jump := emit_jump(.JUMP_IF_NOT)
 	emit(.POP)
@@ -295,6 +310,11 @@ binary :: proc(can_assign: bool) {
 	case: fmt.panicf("Unhandled binary token: %v", op_kind)
 	}
 	// odinfmt: enable
+}
+
+call :: proc(can_assign: bool) {
+	arg_count := argument_list()
+	emit(.CALL, arg_count)
 }
 
 grouping :: proc(can_assign: bool) {
@@ -370,6 +390,7 @@ rules := #partial [Token_Kind]Parse_Rule {
 	.Identifier    = { variable, nil,    .None       },
 	.String        = { string_,  nil,    .None       },
 	.Number        = { number,   nil,    .None       },
+	.Left_Paren    = { grouping, call,   .Call       },
 	.Minus         = { unary,    binary, .Term       },
 	.Plus          = { nil,      binary, .Term       },
 	.Slash         = { nil,      binary, .Factor     },
@@ -416,6 +437,36 @@ block :: proc() {
 		declaration()
 	}
 	consume(.Right_Brace, "Expected '}' after block.")
+}
+
+function :: proc(kind: Function_Kind) {
+	compiler_init(&{}, kind)
+	begin_scope() // no need to end_scope since we end the compiler after finishing function body
+
+	consume(.Left_Paren, "Expected '(' after function name.")
+	for {
+		if check(.Right_Paren) {break}
+		current.function.arity += 1
+		if current.function.arity > 255 {
+			error_at_current("Can't have mre than 255 parameters.")
+		}
+		id := parse_variable("Expected parameter name.")
+		define_variable(id)
+		if !match(.Comma) {break}
+	}
+	consume(.Right_Paren, "Expected ')' after parameters.")
+
+	consume(.Left_Brace, "Expected '{' before function body.")
+	block()
+	fn := compiler_end()
+	emit(.CONST, make_constant(fn))
+}
+
+fun_declaration :: proc() {
+	id := parse_variable("Expect function name.")
+	mark_initialized()
+	function(.Function)
+	define_variable(id)
 }
 
 var_declaration :: proc() {
@@ -504,6 +555,19 @@ print_statement :: proc() {
 	emit(.PRINT)
 }
 
+return_statement :: proc() {
+	if current.kind == .Script {
+		error("Can't return from top-level code.")
+	}
+	if check(.Semicolon) {
+		emit(.NIL)
+	} else {
+		expression()
+	}
+	consume(.Semicolon, "Expected ';' after return value.")
+	emit(.RETURN)
+}
+
 while_statement :: proc() {
 	loop_start := len(current_chunk().code)
 	consume(.Left_Paren, "Expected '(' after 'while'")
@@ -534,6 +598,8 @@ synchronize :: proc() {
 
 declaration :: proc() {
 	switch {
+	case match(.Fun):
+		fun_declaration()
 	case match(.Var):
 		var_declaration()
 	case:
@@ -553,6 +619,8 @@ statement :: proc() {
 		for_statement()
 	case match(.If):
 		if_statement()
+	case match(.Return):
+		return_statement()
 	case match(.While):
 		while_statement()
 	case match(.Left_Brace):

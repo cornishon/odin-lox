@@ -14,6 +14,7 @@ Opcode :: enum u8 {
 	GET_GLOBAL,
 	SET_GLOBAL,
 	LOOP,
+	CALL,
 	JUMP,
 	JUMP_IF_NOT,
 	EQUAL,

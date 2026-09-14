@@ -10,7 +10,9 @@ formatters: map[typeid]fmt.User_Formatter
 @(init)
 set_formatters :: proc() {
 	fmt.set_user_formatters(&formatters)
+	fmt.register_user_formatter(Value, value_formatter)
 	fmt.register_user_formatter(^Function, function_formatter)
+	fmt.register_user_formatter(^Native, native_formatter)
 	fmt.register_user_formatter(^String, string_formatter)
 	fmt.register_user_formatter(^Object, obj_formatter)
 }
@@ -25,6 +27,7 @@ Object :: struct {
 	variant: union {
 		^String,
 		^Function,
+		^Native,
 	},
 }
 
@@ -41,6 +44,14 @@ Function :: struct {
 	chunk: Chunk,
 }
 
+Native_Fn :: proc(args: []Value) -> (result: Value, ok: bool)
+
+Native :: struct {
+	using obj: Object,
+	arity: int,
+	call: Native_Fn,
+}
+
 obj_create :: proc($T: typeid) -> ^T {
 	o := new(T)
 	o.variant = o
@@ -55,6 +66,7 @@ obj_destroy :: proc(o: ^Object) {
 		delete(v.data)
 	case ^Function:
 		chunk_deinit(&v.chunk)
+	case ^Native: // nothing
 	}
 	free(o)
 }
@@ -95,9 +107,16 @@ function_new :: proc(name: string) -> ^Function {
 	return f
 }
 
+native_new :: proc(arity: int, f: Native_Fn) -> ^Native {
+	native := obj_create(Native)
+	native.arity = arity
+	native.call = f
+	return native
+}
+
 obj_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 	o := arg.(^Object) or_return
-	fi.n += fmt.wprint(fi.writer, o.variant)
+	fmt.fmt_value(fi, o.variant, verb)
 	return true
 }
 
@@ -116,8 +135,20 @@ string_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 function_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 	v := arg.(^Function) or_return
 	switch verb {
-	case 'v':
-		fi.n += fmt.wprintf(fi.writer, "<fn %s>", v.name.data)
+	case 'v', 's', 'q':
+		fi.n += fmt.wprintf(fi.writer, "<fun %s>", v.name.data)
+	case:
+		fi.ignore_user_formatters = true
+		fmt.fmt_value(fi, v, verb)
+	}
+	return true
+}
+
+native_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+	v := arg.(^Native) or_return
+	switch verb {
+	case 'v', 's', 'q':
+		fi.n += fmt.wprint(fi.writer, "<native function>")
 	case:
 		fi.ignore_user_formatters = true
 		fmt.fmt_value(fi, v, verb)

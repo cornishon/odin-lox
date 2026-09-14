@@ -47,7 +47,7 @@ disassemble_instruction :: proc(
 	case .CONST, .DEF_GLOBAL, .GET_GLOBAL, .SET_GLOBAL:
 		return constant_instruction(ch, op, offset), new_line
 
-	case .GET_LOCAL, .SET_LOCAL:
+	case .GET_LOCAL, .SET_LOCAL, .CALL:
 		return byte_instruction(ch, op, offset), new_line
 
 	case .LOOP, .JUMP, .JUMP_IF_NOT:
