@@ -1,0 +1,28 @@
+package olox
+
+Opcode :: enum u8 {
+	NIL,
+	FALSE,
+	TRUE,
+	POP,
+	RETURN,
+	CONST,
+	PRINT,
+	GET_LOCAL,
+	SET_LOCAL,
+	DEF_GLOBAL,
+	GET_GLOBAL,
+	SET_GLOBAL,
+	LOOP,
+	JUMP,
+	JUMP_IF_NOT,
+	EQUAL,
+	LESS,
+	GREATER,
+	ADD,
+	SUB,
+	MUL,
+	DIV,
+	NOT,
+	NEGATE,
+}
