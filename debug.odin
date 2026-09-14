@@ -25,8 +25,7 @@ disassemble_instruction :: proc(
 		fmt.printf("% 4d ", new_line)
 	}
 
-	op := Opcode(ch.code[offset])
-	switch op {
+	switch op := Opcode(ch.code[offset]); op {
 	case .NIL,
 	     .FALSE,
 	     .TRUE,
@@ -41,21 +40,42 @@ disassemble_instruction :: proc(
 	     .DIV,
 	     .NOT,
 	     .NEGATE,
+	     .CLOSE_UPVALUE,
 	     .PRINT:
-		return simple_instruction(op, offset), new_line
+		new_offset = simple_instruction(op, offset)
 
 	case .CONST, .DEF_GLOBAL, .GET_GLOBAL, .SET_GLOBAL:
-		return constant_instruction(ch, op, offset), new_line
+		new_offset = constant_instruction(ch, op, offset)
 
-	case .GET_LOCAL, .SET_LOCAL, .CALL:
-		return byte_instruction(ch, op, offset), new_line
+	case .GET_LOCAL, .SET_LOCAL, .GET_UPVALUE, .SET_UPVALUE, .CALL:
+		new_offset = byte_instruction(ch, op, offset)
 
 	case .LOOP, .JUMP, .JUMP_IF_NOT:
-		return jump_instruction(ch, op, offset), new_line
+		new_offset = jump_instruction(ch, op, offset)
+
+	case .CLOSURE:
+		idx := ch.code[offset + 1]
+		fmt.printfln("%-16s % 4d", op, idx)
+
+		fn := ch.consts[idx].(^Object).variant.(^Function)
+		for i in 0 ..< fn.upvalue_count {
+			is_local := bool(ch.code[2 * i])
+			index := ch.code[2 * i + 1]
+			fmt.printfln(
+				"%04d    |                     %s %d",
+				offset - 2,
+				is_local ? "local" : "upvalue",
+				index,
+			)
+		}
+		new_offset = offset + 2 + 2 * fn.upvalue_count
+
+	case:
+		fmt.printfln("Unknown opcode %d", op)
+		new_offset = offset + 1
 	}
 
-	fmt.printfln("Unknown opcode %d", op)
-	return offset + 1, new_line
+	return
 }
 
 simple_instruction :: proc(op: Opcode, offset: int) -> int {

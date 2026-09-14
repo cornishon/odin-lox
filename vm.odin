@@ -12,6 +12,7 @@ STACK_MAX :: FRAMES_MAX * 256
 @(thread_local)
 vm: struct {
 	objects: ^Object,
+	open_upvalues: ^Upvalue,
 	strings: Table,
 	globals: Table,
 	stdout: io.Writer,
@@ -25,7 +26,7 @@ vm: struct {
 }
 
 Call_Frame :: struct {
-	function: ^Function,
+	closure: ^Closure,
 	ip: [^]u8,
 	slots: [^]Value,
 }
@@ -57,7 +58,7 @@ vm_destroy :: proc() {
 	io.flush(vm.stdout)
 	curr := vm.objects
 	for curr != nil {
-		next := curr.next
+		next := curr.next_obj
 		obj_destroy(curr)
 		curr = next
 	}
@@ -70,12 +71,10 @@ vm_interpret :: proc(source: string) -> bool {
 	function := compile(source) or_return
 	reset_stack()
 	push(function)
-	vm.frame^ = {
-		function = function,
-		ip = raw_data(function.chunk.code),
-		slots = &vm.stack[0],
-	}
-	vm.frame_count += 1
+	c := closure_new(function)
+	pop_()
+	push(c)
+	call_closure(c, 0)
 	return run()
 }
 
@@ -93,6 +92,7 @@ run :: proc() -> bool {
 			pop_()
 		case .RETURN:
 			result := pop_()
+			close_upvalues(vm.frame.slots)
 			if vm.frame_count -= 1; vm.frame_count == 0 {
 				pop_()
 				return true
@@ -127,10 +127,32 @@ run :: proc() -> bool {
 				table_remove(&vm.globals, name)
 				return runtime_error("Undefined variable '%s'", name)
 			}
+		case .GET_UPVALUE:
+			slot := read_byte()
+			push(vm.frame.closure.upvalues[slot].location^)
+		case .SET_UPVALUE:
+			slot := read_byte()
+			vm.frame.closure.upvalues[slot].location^ = peek(0)
 		case .CALL:
 			argc := int(read_byte())
 			if !call_value(peek(argc), argc) {
 				return false
+			}
+		case .CLOSE_UPVALUE:
+			close_upvalues(&vm.stack_top[-1])
+			pop_()
+		case .CLOSURE:
+			fn := read_const().(^Object).variant.(^Function)
+			cl := closure_new(fn)
+			push(cl)
+			for &uv in cl.upvalues {
+				is_local := bool(read_byte())
+				index := read_byte()
+				if is_local {
+					uv = capture_upvalue(&vm.frame.slots[index])
+				} else {
+					uv = vm.frame.closure.upvalues[index]
+				}
 			}
 		case .LOOP:
 			offset := read_short()
@@ -227,9 +249,9 @@ peek :: #force_inline proc "contextless" (distance: int) -> Value {
 	return vm.stack_top[-distance - 1]
 }
 
-call_function :: proc(fun: ^Function, argc: int) -> bool {
-	if argc != fun.arity {
-		return runtime_error("Expected %d arguments but got %d.", fun.arity, argc)
+call_closure :: proc(c: ^Closure, argc: int) -> bool {
+	if argc != c.function.arity {
+		return runtime_error("Expected %d arguments but got %d.", c.function.arity, argc)
 	}
 	if vm.frame_count == FRAMES_MAX {
 		return runtime_error("Stack overflow.")
@@ -237,8 +259,8 @@ call_function :: proc(fun: ^Function, argc: int) -> bool {
 	vm.frame = &vm.frames[vm.frame_count]
 	vm.frame_count += 1
 	vm.frame^ = {
-		function = fun,
-		ip = raw_data(fun.chunk.code),
+		closure = c,
+		ip = raw_data(c.function.chunk.code),
 		slots = vm.stack_top[-argc - 1:],
 	}
 	return true
@@ -247,8 +269,10 @@ call_function :: proc(fun: ^Function, argc: int) -> bool {
 call_value :: proc(callee: Value, argc: int) -> bool {
 	if obj, is_obj := callee.(^Object); is_obj {
 		switch fun in obj.variant {
+		case ^Closure:
+			return call_closure(fun, argc)
 		case ^Function:
-			return call_function(fun, argc)
+			panic("tried to call a bare function")
 		case ^Native:
 			if argc != fun.arity {
 				return runtime_error("Expected %d arguments but got %d.", fun.arity, argc)
@@ -258,13 +282,43 @@ call_value :: proc(callee: Value, argc: int) -> bool {
 			push(result)
 			return true
 		case ^String:
+		case ^Upvalue:
 		}
 	}
 	return runtime_error("Can only call functions and classes, but got: %v", callee)
 }
 
+capture_upvalue :: proc(slot: ^Value) -> ^Upvalue {
+	prev_uv: ^Upvalue
+	uv := vm.open_upvalues
+	for uv != nil && uv.location > slot {
+		prev_uv = uv
+		uv = uv.next_open
+	}
+	if uv != nil && uv.location == slot {
+		return uv
+	}
+	created_uv := upvalue_new(slot)
+	created_uv.next_open = uv
+	if prev_uv == nil {
+		vm.open_upvalues = created_uv
+	} else {
+		prev_uv.next_open = created_uv
+	}
+	return created_uv
+}
+
+close_upvalues :: proc(last: ^Value) {
+	for vm.open_upvalues != nil && vm.open_upvalues.location >= last {
+		uv := vm.open_upvalues
+		uv.closed = uv.location^
+		uv.location = &uv.closed
+		vm.open_upvalues = uv.next_open
+	}
+}
+
 frame_chunk :: #force_inline proc "contextless" () -> ^Chunk {
-	return &vm.frame.function.chunk
+	return &vm.frame.closure.function.chunk
 }
 
 reset_stack :: proc() {
@@ -280,7 +334,7 @@ runtime_error :: proc(format: string, args: ..any) -> bool {
 	fmt.eprintfln(format, ..args)
 
 	#reverse for frame, i in vm.frames[:vm.frame_count] {
-		fun := frame.function
+		fun := frame.closure.function
 		instr = mem.ptr_sub(frame.ip, raw_data(fun.chunk.code)) - 1
 		fmt.eprintf("[line %d] in ", chunk_get_line(&fun.chunk, instr))
 		if i == 0 {

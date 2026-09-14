@@ -26,9 +26,17 @@ Parse_Rule :: struct {
 	precedence: Precedence,
 }
 
+@(private = "file")
 Local :: struct {
 	name: Token,
 	depth: int,
+	is_captured: bool,
+}
+
+@(private = "file")
+Upvalue :: struct {
+	index: u8,
+	is_local: bool,
 }
 
 Function_Kind :: enum {
@@ -41,6 +49,7 @@ Compiler :: struct {
 	function: ^Function,
 	kind: Function_Kind,
 	locals: [dynamic; 256]Local,
+	upvalues: [dynamic; 256]Upvalue,
 	scope_depth: int,
 	identifiers: Table,
 }
@@ -194,7 +203,7 @@ end_scope :: proc() {
 	for i := len(current.locals) - 1; i >= 0; i -= 1 {
 		local := current.locals[i]
 		if local.depth <= current.scope_depth {break}
-		emit(.POP)
+		emit(local.is_captured ? .CLOSE_UPVALUE : .POP)
 		pop(&current.locals)
 	}
 }
@@ -207,6 +216,32 @@ identifier_constant :: proc(token: Token) -> u8 {
 	idx := make_constant(name)
 	table_set(&current.identifiers, name, f64(idx))
 	return idx
+}
+
+resolve_upvalue :: proc(compiler: ^Compiler, name: Token) -> (idx: u8, ok: bool) {
+	if compiler.enclosing == nil {return}
+	if local, l_ok := resolve_local(compiler.enclosing, name); l_ok {
+		compiler.enclosing.locals[local].is_captured = true
+		return add_upvalue(compiler, local, true), true
+	}
+	if upvalue, u_ok := resolve_upvalue(compiler.enclosing, name); u_ok {
+		return add_upvalue(compiler, upvalue, false), true
+	}
+	return
+}
+
+add_upvalue :: proc(compiler: ^Compiler, index: u8, is_local: bool) -> u8 {
+	for uv, i in compiler.upvalues {
+		if uv.index == index && uv.is_local == is_local {
+			return u8(i)
+		}
+	}
+	if append(&compiler.upvalues, Upvalue{index, is_local}) == 0 {
+		error("Too many closure variables in function.")
+		return 0
+	}
+	defer compiler.function.upvalue_count += 1
+	return u8(compiler.function.upvalue_count)
 }
 
 resolve_local :: proc(compiler: ^Compiler, token: Token) -> (idx: u8, ok: bool) {
@@ -352,10 +387,13 @@ variable :: proc(can_assign: bool) {
 
 named_variable :: proc(name: Token, can_assign: bool) {
 	get, set: Opcode
-	arg, is_local := resolve_local(current, name)
-	if is_local {
+	arg, ok := resolve_local(current, name)
+	if ok {
 		get = .GET_LOCAL
 		set = .SET_LOCAL
+	} else if arg, ok = resolve_upvalue(current, name); ok {
+		get = .GET_UPVALUE
+		set = .SET_UPVALUE
 	} else {
 		arg = identifier_constant(name)
 		get = .GET_GLOBAL
@@ -440,7 +478,8 @@ block :: proc() {
 }
 
 function :: proc(kind: Function_Kind) {
-	compiler_init(&{}, kind)
+	compiler: Compiler
+	compiler_init(&compiler, kind)
 	begin_scope() // no need to end_scope since we end the compiler after finishing function body
 
 	consume(.Left_Paren, "Expected '(' after function name.")
@@ -458,8 +497,12 @@ function :: proc(kind: Function_Kind) {
 
 	consume(.Left_Brace, "Expected '{' before function body.")
 	block()
+
 	fn := compiler_end()
-	emit(.CONST, make_constant(fn))
+	emit(.CLOSURE, make_constant(fn))
+	for uv in compiler.upvalues {
+		emit(u8(uv.is_local), uv.index)
+	}
 }
 
 fun_declaration :: proc() {

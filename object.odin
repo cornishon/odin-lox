@@ -23,11 +23,13 @@ delete_formatters :: proc() {
 }
 
 Object :: struct {
-	next: ^Object,
+	next_obj: ^Object,
 	variant: union {
 		^String,
 		^Function,
 		^Native,
+		^Closure,
+		^Upvalue,
 	},
 }
 
@@ -41,6 +43,7 @@ Function :: struct {
 	using obj: Object,
 	name: ^String,
 	arity: int,
+	upvalue_count: int,
 	chunk: Chunk,
 }
 
@@ -52,10 +55,23 @@ Native :: struct {
 	call: Native_Fn,
 }
 
+Closure :: struct {
+	using obj: Object,
+	function: ^Function,
+	upvalues: []^Upvalue,
+}
+
+Upvalue :: struct {
+	using obj: Object,
+	location: ^Value,
+	closed: Value,
+	next_open: ^Upvalue,
+}
+
 obj_create :: proc($T: typeid) -> ^T {
 	o := new(T)
 	o.variant = o
-	o.next = vm.objects
+	o.next_obj = vm.objects
 	vm.objects = &o.obj
 	return o
 }
@@ -66,7 +82,10 @@ obj_destroy :: proc(o: ^Object) {
 		delete(v.data)
 	case ^Function:
 		chunk_deinit(&v.chunk)
-	case ^Native: // nothing
+	case ^Closure:
+		delete(v.upvalues)
+	case ^Upvalue:
+	case ^Native:
 	}
 	free(o)
 }
@@ -105,6 +124,20 @@ function_new :: proc(name: string) -> ^Function {
 	f.name = string_copy(name)
 	chunk_init(&f.chunk)
 	return f
+}
+
+closure_new :: proc(fn: ^Function) -> ^Closure {
+	upvalues := make([]^Upvalue, fn.upvalue_count)
+	o := obj_create(Closure)
+	o.function = fn
+	o.upvalues = upvalues
+	return o
+}
+
+upvalue_new :: proc(slot: ^Value) -> ^Upvalue {
+	o := obj_create(Upvalue)
+	o.location = slot
+	return o
 }
 
 native_new :: proc(arity: int, f: Native_Fn) -> ^Native {

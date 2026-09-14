@@ -38,6 +38,10 @@ value_type :: proc(value: Value) -> string {
 			return "function"
 		case ^Native:
 			return "native function"
+		case ^Closure:
+			return "closure"
+		case ^Upvalue:
+			return "upvalue"
 		}
 	}
 	return "nil"
