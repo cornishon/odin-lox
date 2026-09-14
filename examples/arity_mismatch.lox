@@ -1,0 +1,9 @@
+// Demonstrates error stack trace functionality
+
+fun a() { b(); }
+fun b() { c(); }
+fun c() {
+  c("too", "many");
+}
+
+a();
