@@ -363,6 +363,17 @@ call :: proc(can_assign: bool) {
 	emit(.CALL, arg_count)
 }
 
+dot :: proc(can_assign: bool) {
+	consume(.Identifier, "Expected property name after '.'.")
+	name := identifier_constant(parser.previous)
+	if can_assign && match(.Equal) {
+		expression()
+		emit(.SET_PROPERTY, name)
+	} else {
+		emit(.GET_PROPERTY, name)
+	}
+}
+
 grouping :: proc(can_assign: bool) {
 	expression()
 	consume(.Right_Paren, "Expected ')' after expression.")
@@ -440,6 +451,7 @@ rules := #partial [Token_Kind]Parse_Rule {
 	.Identifier    = { variable, nil,    .None       },
 	.String        = { string_,  nil,    .None       },
 	.Number        = { number,   nil,    .None       },
+	.Dot           = { nil,      dot,    .Call       },
 	.Left_Paren    = { grouping, call,   .Call       },
 	.Minus         = { unary,    binary, .Term       },
 	.Plus          = { nil,      binary, .Term       },
@@ -522,6 +534,18 @@ fun_declaration :: proc() {
 	mark_initialized()
 	function(.Function)
 	define_variable(id)
+}
+
+class_declaration :: proc() {
+	consume(.Identifier, "Expected class name.")
+	name := identifier_constant(parser.previous)
+	declare_variable()
+
+	emit(.CLASS, name)
+	define_variable(name)
+
+	consume(.Left_Brace, "Expect '{' before class body.")
+	consume(.Right_Brace, "Expect '}' after class body.")
 }
 
 var_declaration :: proc() {
@@ -653,6 +677,8 @@ synchronize :: proc() {
 
 declaration :: proc() {
 	switch {
+	case match(.Class):
+		class_declaration()
 	case match(.Fun):
 		fun_declaration()
 	case match(.Var):

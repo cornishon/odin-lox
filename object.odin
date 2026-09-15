@@ -6,33 +6,20 @@ import "core:hash"
 import "core:mem"
 import "core:strings"
 
-formatters: map[typeid]fmt.User_Formatter
-
-@(init)
-set_formatters :: proc() {
-	fmt.set_user_formatters(&formatters)
-	fmt.register_user_formatter(Value, value_formatter)
-	fmt.register_user_formatter(^Function, function_formatter)
-	fmt.register_user_formatter(^Native, native_formatter)
-	fmt.register_user_formatter(^String, string_formatter)
-	fmt.register_user_formatter(^Object, obj_formatter)
-}
-
-@(fini)
-delete_formatters :: proc() {
-	delete(formatters)
-}
-
 Object :: struct {
 	next_obj: ^Object,
 	is_marked: bool,
-	variant: union {
-		^String,
-		^Function,
-		^Native,
-		^Closure,
-		^Upvalue,
-	},
+	variant: Object_Variant,
+}
+
+Object_Variant :: union {
+	^String,
+	^Function,
+	^Native,
+	^Closure,
+	^Upvalue,
+	^Class,
+	^Instance,
 }
 
 String :: struct {
@@ -70,6 +57,17 @@ Upvalue :: struct {
 	next_open: ^Upvalue,
 }
 
+Class :: struct {
+	using obj: Object,
+	name: ^String,
+}
+
+Instance :: struct {
+	using obj: Object,
+	class: ^Class,
+	fields: Table,
+}
+
 obj_create :: proc($T: typeid) -> ^T {
 	o := new(T, lox_allocator())
 	o.variant = o
@@ -101,6 +99,11 @@ obj_destroy :: proc(o: ^Object) {
 	case ^Upvalue:
 		delete(mem.ptr_to_bytes(v))
 	case ^Native:
+		delete(mem.ptr_to_bytes(v))
+	case ^Class:
+		delete(mem.ptr_to_bytes(v))
+	case ^Instance:
+		table_destroy(&v.fields)
 		delete(mem.ptr_to_bytes(v))
 	}
 }
@@ -136,7 +139,6 @@ copy_string :: proc(text: string) -> ^String {
 
 new_function :: proc() -> ^Function {
 	f := obj_create(Function)
-	push(f); defer pop_()
 	chunk_init(&f.chunk)
 	return f
 }
@@ -146,6 +148,18 @@ new_closure :: proc(fn: ^Function) -> ^Closure {
 	o := obj_create(Closure)
 	o.function = fn
 	o.upvalues = upvalues
+	return o
+}
+
+new_class :: proc(name: ^String) -> ^Class {
+	o := obj_create(Class)
+	o.name = name
+	return o
+}
+
+new_instance :: proc(class: ^Class) -> ^Instance {
+	o := obj_create(Instance)
+	o.class = class
 	return o
 }
 
@@ -170,25 +184,54 @@ obj_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 
 string_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 	v := arg.(^String) or_return
-	switch verb {
-	case 's', 'v', 'q', 'x', 'X':
-		fmt.fmt_string(fi, v.data, verb)
-	case:
-		fi.ignore_user_formatters = true
-		fmt.fmt_value(fi, v, verb)
-	}
-	return true
+	return variant_formatter(fi, v, verb, v.data)
 }
 
 function_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 	v := arg.(^Function) or_return
+	if v.name == nil {
+		return variant_formatter(fi, v, verb, "<script>")
+	} else {
+		return variant_formatter(fi, v, verb, "<fun %s>", v.name.data)
+	}
+}
+
+closure_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+	v := arg.(^Closure) or_return
+	fmt.fmt_value(fi, v.function, verb)
+	return true
+}
+
+upvalue_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+	v := arg.(^Upvalue) or_return
+	return variant_formatter(fi, v, verb, "upvalue")
+}
+
+native_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+	v := arg.(^Native) or_return
+	return variant_formatter(fi, v, verb, "<native function>")
+}
+
+class_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+	v := arg.(^Class) or_return
+	return variant_formatter(fi, v, verb, "class %s", v.name.data)
+}
+
+instance_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+	v := arg.(^Instance) or_return
+	return variant_formatter(fi, v, verb, "%s instance", v.class.name.data)
+}
+
+variant_formatter :: proc(
+	fi: ^fmt.Info,
+	v: Object_Variant,
+	verb: rune,
+	format: string,
+	args: ..any,
+) -> bool {
 	switch verb {
 	case 'v', 's', 'q':
-		if v.name != nil {
-			fi.n += fmt.wprintf(fi.writer, "<fun %s>", v.name.data)
-		} else {
-			fi.n += fmt.wprintf(fi.writer, "<script>")
-		}
+		fi.n += fmt.wprintf(fi.writer, format, ..args)
 	case:
 		fi.ignore_user_formatters = true
 		fmt.fmt_value(fi, v, verb)
@@ -196,14 +239,22 @@ function_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 	return true
 }
 
-native_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
-	v := arg.(^Native) or_return
-	switch verb {
-	case 'v', 's', 'q':
-		fi.n += fmt.wprint(fi.writer, "<native function>")
-	case:
-		fi.ignore_user_formatters = true
-		fmt.fmt_value(fi, v, verb)
-	}
-	return true
+formatters: map[typeid]fmt.User_Formatter
+
+@(init)
+set_formatters :: proc() {
+	fmt.set_user_formatters(&formatters)
+	fmt.register_user_formatter(Value, value_formatter)
+	fmt.register_user_formatter(^Object, obj_formatter)
+	fmt.register_user_formatter(^String, string_formatter)
+	fmt.register_user_formatter(^Function, function_formatter)
+	fmt.register_user_formatter(^Native, native_formatter)
+	fmt.register_user_formatter(^Closure, closure_formatter)
+	fmt.register_user_formatter(^Upvalue, upvalue_formatter)
+	fmt.register_user_formatter(^Class, class_formatter)
+}
+
+@(fini)
+delete_formatters :: proc() {
+	delete(formatters)
 }

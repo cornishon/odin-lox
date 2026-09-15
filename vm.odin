@@ -98,12 +98,16 @@ run :: proc() -> bool {
 		switch op {
 		case .NIL:
 			push(nil)
+
 		case .FALSE:
 			push(false)
+
 		case .TRUE:
 			push(true)
+
 		case .POP:
 			pop_()
+
 		case .RETURN:
 			result := pop_()
 			close_upvalues(vm.frame.slots)
@@ -114,20 +118,26 @@ run :: proc() -> bool {
 			vm.stack_top = vm.frame.slots
 			push(result)
 			vm.frame = &vm.frames[vm.frame_count - 1]
+
 		case .CONST:
 			push(read_const())
+
 		case .PRINT:
 			fmt.wprintln(vm.stdout, pop_())
+
 		case .GET_LOCAL:
 			slot := read_byte()
 			push(vm.frame.slots[slot])
+
 		case .SET_LOCAL:
 			slot := read_byte()
 			vm.frame.slots[slot] = peek(0)
+
 		case .DEF_GLOBAL:
 			name := read_string()
 			table_set(&vm.globals, name, peek(0))
 			pop_()
+
 		case .GET_GLOBAL:
 			name := read_string()
 			if v, ok := table_get(&vm.globals, name); ok {
@@ -135,26 +145,55 @@ run :: proc() -> bool {
 			} else {
 				return runtime_error("Undefined variable '%s'", name)
 			}
+
 		case .SET_GLOBAL:
 			name := read_string()
 			if table_set(&vm.globals, name, peek(0)) {
 				table_remove(&vm.globals, name)
 				return runtime_error("Undefined variable '%s'", name)
 			}
+
 		case .GET_UPVALUE:
 			slot := read_byte()
 			push(vm.frame.closure.upvalues[slot].location^)
+
 		case .SET_UPVALUE:
 			slot := read_byte()
 			vm.frame.closure.upvalues[slot].location^ = peek(0)
+
+		case .GET_PROPERTY:
+			instance, is_inst := value_as(Instance, peek(0))
+			if !is_inst {
+				return runtime_error("Only instances have properties.")
+			}
+			name := read_string()
+			value, ok := table_get(&instance.fields, name)
+			if !ok {
+				return runtime_error("Undefined property %q", name)
+			}
+			pop_() // instance
+			push(value)
+
+		case .SET_PROPERTY:
+			instance, is_inst := value_as(Instance, peek(1))
+			if !is_inst {
+				return runtime_error("Only instances have properties.")
+			}
+			table_set(&instance.fields, read_string(), peek(0))
+			value := pop_()
+			pop_()
+			push(value)
+
 		case .CALL:
 			argc := int(read_byte())
 			if !call_value(peek(argc), argc) {
 				return false
 			}
+
 		case .CLOSE_UPVALUE:
 			close_upvalues(&vm.stack_top[-1])
 			pop_()
+
 		case .CLOSURE:
 			fn := read_const().(^Object).variant.(^Function)
 			cl := new_closure(fn)
@@ -168,53 +207,68 @@ run :: proc() -> bool {
 					uv = vm.frame.closure.upvalues[index]
 				}
 			}
+
 		case .LOOP:
 			offset := read_short()
 			vm.frame.ip = vm.frame.ip[-offset:]
+
 		case .JUMP:
 			offset := read_short()
 			vm.frame.ip = vm.frame.ip[offset:]
+
 		case .JUMP_IF_NOT:
 			offset := read_short()
 			if value_is_falsey(peek(0)) {
 				vm.frame.ip = vm.frame.ip[offset:]
 			}
+
 		case .EQUAL:
 			b := pop_()
 			a := pop_()
 			push(a == b)
+
 		case .LESS:
 			a, b := pop_numbers() or_return
 			push(a < b)
+
 		case .GREATER:
 			a, b := pop_numbers() or_return
 			push(a > b)
+
 		case .ADD:
-			if b, b_ok := value_as_string(peek(0)); b_ok {
-				if a, a_ok := value_as_string(peek(1)); a_ok {
+			if b, b_ok := value_as(String, peek(0)); b_ok {
+				if a, a_ok := value_as(String, peek(1)); a_ok {
 					concatenate(a, b)
 					continue
 				}
 			}
 			a, b := pop_numbers() or_return
 			push(a + b)
+
 		case .SUB:
 			a, b := pop_numbers() or_return
 			push(a - b)
+
 		case .MUL:
 			a, b := pop_numbers() or_return
 			push(a * b)
+
 		case .DIV:
 			a, b := pop_numbers() or_return
 			push(a / b)
+
 		case .NOT:
 			push(value_is_falsey(pop_()))
+
 		case .NEGATE:
 			if n, ok := peek(0).(f64); ok {
 				pop_(); push(-n)
 			} else {
 				return runtime_error("Operand must be a number.")
 			}
+
+		case .CLASS:
+			push(new_class(read_string()))
 		}
 	}
 }
@@ -288,19 +342,23 @@ call_closure :: proc(c: ^Closure, argc: int) -> bool {
 
 call_value :: proc(callee: Value, argc: int) -> bool {
 	if obj, is_obj := callee.(^Object); is_obj {
-		switch fun in obj.variant {
+		switch callable in obj.variant {
 		case ^Closure:
-			return call_closure(fun, argc)
+			return call_closure(callable, argc)
 		case ^Function:
 			panic("tried to call a bare function")
+		case ^Class:
+			vm.stack_top[-argc - 1] = new_instance(callable)
+			return true
 		case ^Native:
-			if argc != fun.arity {
-				return runtime_error("Expected %d arguments but got %d.", fun.arity, argc)
+			if argc != callable.arity {
+				return runtime_error("Expected %d arguments but got %d.", callable.arity, argc)
 			}
-			result := fun.call(vm.stack_top[-argc:0]) or_return
+			result := callable.call(vm.stack_top[-argc:0]) or_return
 			vm.stack_top = vm.stack_top[-argc - 1:]
 			push(result)
 			return true
+		case ^Instance:
 		case ^String:
 		case ^Upvalue:
 		}

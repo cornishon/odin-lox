@@ -92,8 +92,13 @@ blacken_object :: proc(obj: ^Object) {
 		for uv in v.upvalues {
 			mark_object(uv)
 		}
+	case ^Class:
+		mark_object(v.name)
 	case ^Upvalue:
 		mark_value(v.closed)
+	case ^Instance:
+		mark_object(v.class)
+		mark_table(&v.fields)
 	case ^String, ^Native:
 	}
 }
@@ -110,7 +115,7 @@ mark_object :: proc(o: ^Object) {
 	when DEBUG_LOG_GC {fmt.printfln("%p mark %v", o, o)}
 	o.is_marked = true
 	switch v in o.variant {
-	case ^Function, ^Closure, ^Upvalue:
+	case ^Function, ^Closure, ^Upvalue, ^Class, ^Instance:
 		append(&vm.gray_stack, o)
 	case ^String, ^Native:
 	}

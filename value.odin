@@ -42,15 +42,19 @@ value_type :: proc(value: Value) -> string {
 			return "closure"
 		case ^Upvalue:
 			return "upvalue"
+		case ^Class:
+			return "class" // maybe should be the class name?
+		case ^Instance:
+			return v.class.name.data
 		}
 	}
 	return "nil"
 }
 
-value_as_string :: proc(value: Value) -> (^String, bool) {
+value_as :: proc($T: typeid, value: Value) -> (^T, bool) {
 	#partial switch v in value {
 	case ^Object:
-		return v.variant.(^String)
+		return v.variant.(^T)
 	}
 	return nil, false
 }

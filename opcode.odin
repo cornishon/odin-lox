@@ -15,6 +15,8 @@ Opcode :: enum u8 {
 	SET_GLOBAL,
 	GET_UPVALUE,
 	SET_UPVALUE,
+	GET_PROPERTY,
+	SET_PROPERTY,
 	LOOP,
 	CALL,
 	CLOSURE,
@@ -30,4 +32,5 @@ Opcode :: enum u8 {
 	DIV,
 	NOT,
 	NEGATE,
+	CLASS,
 }
