@@ -19,6 +19,7 @@ Opcode :: enum u8 {
 	SET_PROPERTY,
 	LOOP,
 	CALL,
+	INVOKE,
 	CLOSURE,
 	CLOSE_UPVALUE,
 	JUMP,

@@ -384,12 +384,15 @@ call :: proc(can_assign: bool) {
 
 dot :: proc(can_assign: bool) {
 	consume(.Identifier, "Expected property name after '.'.")
-	name := identifier_constant(parser.previous)
+	id := identifier_constant(parser.previous)
 	if can_assign && match(.Equal) {
 		expression()
-		emit(.SET_PROPERTY, name)
+		emit(.SET_PROPERTY, id)
+	} else if match(.Left_Paren) {
+		argc := argument_list()
+		emit(.INVOKE, id, argc)
 	} else {
-		emit(.GET_PROPERTY, name)
+		emit(.GET_PROPERTY, id)
 	}
 }
 

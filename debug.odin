@@ -77,6 +77,9 @@ disassemble_instruction :: proc(
 		}
 		new_offset = offset + 2 + 2 * fn.upvalue_count
 
+	case .INVOKE:
+		new_offset = invoke_instruction(ch, op, offset)
+
 	case:
 		fmt.printfln("Unknown opcode %d", op)
 		new_offset = offset + 1
@@ -108,5 +111,13 @@ jump_instruction :: proc(ch: ^Chunk, op: Opcode, offset: int) -> int {
 byte_instruction :: proc(ch: ^Chunk, op: Opcode, offset: int) -> int {
 	idx := ch.code[offset + 1]
 	fmt.printfln("%-16s % 4d", op, idx)
+	return offset + 2
+}
+
+invoke_instruction :: proc(ch: ^Chunk, op: Opcode, offset: int) -> int {
+	idx := ch.code[offset + 1]
+	argc := ch.code[offset + 2]
+	name := ch.consts[idx]
+	fmt.printfln("%-16s (%d args) % 4d %s", op, argc, idx, name)
 	return offset + 2
 }

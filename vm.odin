@@ -193,6 +193,13 @@ run :: proc() -> bool {
 				return false
 			}
 
+		case .INVOKE:
+			method := read_string()
+			argc := int(read_byte())
+			if !invoke(method, argc) {
+				return false
+			}
+
 		case .CLOSE_UPVALUE:
 			close_upvalues(&vm.stack_top[-1])
 			pop_()
@@ -272,6 +279,7 @@ run :: proc() -> bool {
 
 		case .CLASS:
 			push(new_class(read_string()))
+
 		case .METHOD:
 			define_method(read_string())
 		}
@@ -378,6 +386,26 @@ call_value :: proc(callee: Value, argc: int) -> bool {
 		}
 	}
 	return runtime_error("Can only call functions and classes, but got: %v", callee)
+}
+
+invoke :: proc(name: ^String, argc: int) -> bool {
+	receiver := peek(argc)
+	if instance, ok := value_as(Instance, receiver); ok {
+		if value, was_field := table_get(&instance.fields, name); was_field {
+			vm.stack_top[-argc - 1] = value
+			return call_value(value, argc)
+		}
+		return invoke_from_class(instance.class, name, argc)
+	}
+	return runtime_error("Only instances have methods.")
+}
+
+invoke_from_class :: proc(class: ^Class, name: ^String, argc: int) -> bool {
+	if val, ok := table_get(&class.methods, name); ok {
+		method := value_as(Closure, val) or_else panic("compilation error")
+		return call_closure(method, argc)
+	}
+	return runtime_error("Undefined property %q.", name)
 }
 
 bind_method :: proc(class: ^Class, name: ^String) -> bool {
