@@ -40,10 +40,8 @@ run_file :: proc(t: ^testing.T, loxpath: string, temp := context.temp_allocator)
 }
 
 expect_output :: proc(t: ^testing.T, expected: string, source: string) {
-	b: strings.Builder
-	defer strings.builder_destroy(&b)
-	vm_init(strings.to_writer(&b))
-	defer vm_destroy()
+	b: strings.Builder; defer strings.builder_destroy(&b)
+	vm_init(strings.to_writer(&b)); defer vm_destroy()
 	testing.expect(t, vm_interpret(source))
 	actual := strings.to_string(b)
 	testing.expect_value(t, actual, expected)

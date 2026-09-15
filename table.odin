@@ -1,7 +1,5 @@
 package olox
 
-import "core:mem"
-
 // key == nil && value == nil: EMPTY
 // key == nil && value != nil: TOMBSTONE
 Entry :: struct {
@@ -12,16 +10,10 @@ Entry :: struct {
 Table :: struct {
 	entries: []Entry,
 	used: int,
-	allocator: mem.Allocator,
-}
-
-table_init :: proc(table: ^Table, allocator := context.allocator) -> ^Table {
-	table.allocator = allocator
-	return table
 }
 
 table_destroy :: proc(table: ^Table) {
-	delete(table.entries, table.allocator)
+	delete(table.entries, lox_allocator())
 	table^ = {}
 }
 
@@ -79,6 +71,21 @@ table_find_string :: proc(
 	}
 }
 
+table_remove_white :: proc(table: ^Table) {
+	for e in table.entries {
+		if e.key != nil && !e.key.is_marked {
+			table_remove(table, e.key)
+		}
+	}
+}
+
+mark_table :: proc(t: ^Table) {
+	for e in t.entries {
+		mark_object(e.key)
+		mark_value(e.value)
+	}
+}
+
 _find_slot :: proc(entries: []Entry, key: ^String) -> ^Entry {
 	capacity := len(entries)
 	index := int(key.hash) % capacity
@@ -104,10 +111,7 @@ _find_slot :: proc(entries: []Entry, key: ^String) -> ^Entry {
 }
 
 _table_grow :: proc(table: ^Table, new_capacity: int) {
-	if table.allocator.procedure == nil {
-		table.allocator = context.allocator
-	}
-	new_entries := make([]Entry, new_capacity, table.allocator)
+	new_entries := make([]Entry, new_capacity, lox_allocator())
 
 	table.used = 0
 	for e in table.entries {
@@ -117,6 +121,6 @@ _table_grow :: proc(table: ^Table, new_capacity: int) {
 		}
 	}
 
-	delete(table.entries, table.allocator)
+	delete(table.entries, lox_allocator())
 	table.entries = new_entries
 }

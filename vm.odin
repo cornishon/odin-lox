@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:io"
 import "core:math"
 import "core:mem"
+import "core:strings"
 import "core:time"
 
 FRAMES_MAX :: 64
@@ -11,11 +12,18 @@ STACK_MAX :: FRAMES_MAX * 256
 
 @(thread_local)
 vm: struct {
+	initialized: bool,
 	objects: ^Object,
 	open_upvalues: ^Upvalue,
 	strings: Table,
 	globals: Table,
 	stdout: io.Writer,
+
+	// gc
+	bytes_allocated: int,
+	next_gc: int,
+	backing_allocator: mem.Allocator,
+	gray_stack: [dynamic]^Object,
 
 	// runtime state
 	stack: [STACK_MAX]Value,
@@ -31,10 +39,14 @@ Call_Frame :: struct {
 	slots: [^]Value,
 }
 
-vm_init :: proc(stdout: io.Writer, allocator := context.allocator) {
+vm_init :: proc(stdout: io.Writer, backing_allocator := context.allocator) {
+	assert(!vm.initialized)
+	defer vm.initialized = true
+
+	vm.backing_allocator = backing_allocator
+	vm.gray_stack.allocator = backing_allocator
+	vm.next_gc = 1024 * 1024
 	vm.stdout = stdout
-	table_init(&vm.strings, allocator)
-	table_init(&vm.globals, allocator)
 	reset_stack()
 
 	define_native("clock", 0, proc(args: []Value) -> (Value, bool) {
@@ -50,28 +62,30 @@ vm_init :: proc(stdout: io.Writer, allocator := context.allocator) {
 	})
 
 	define_native("typeof", 1, proc(args: []Value) -> (Value, bool) {
-		return string_copy(value_type(args[0])), true
+		return copy_string(value_type(args[0])), true
 	})
 }
 
 vm_destroy :: proc() {
 	io.flush(vm.stdout)
 	curr := vm.objects
+	table_destroy(&vm.globals)
+	table_destroy(&vm.strings)
 	for curr != nil {
 		next := curr.next_obj
 		obj_destroy(curr)
 		curr = next
 	}
-	table_destroy(&vm.globals)
-	table_destroy(&vm.strings)
+	delete(vm.gray_stack)
 	vm = {}
 }
 
 vm_interpret :: proc(source: string) -> bool {
+	assert(vm.initialized)
 	function := compile(source) or_return
 	reset_stack()
 	push(function)
-	c := closure_new(function)
+	c := new_closure(function)
 	pop_()
 	push(c)
 	call_closure(c, 0)
@@ -143,7 +157,7 @@ run :: proc() -> bool {
 			pop_()
 		case .CLOSURE:
 			fn := read_const().(^Object).variant.(^Function)
-			cl := closure_new(fn)
+			cl := new_closure(fn)
 			push(cl)
 			for &uv in cl.upvalues {
 				is_local := bool(read_byte())
@@ -178,8 +192,7 @@ run :: proc() -> bool {
 		case .ADD:
 			if b, b_ok := value_as_string(peek(0)); b_ok {
 				if a, a_ok := value_as_string(peek(1)); a_ok {
-					vm.stack_top = vm.stack_top[-2:]
-					push(string_concat(a, b))
+					concatenate(a, b)
 					continue
 				}
 			}
@@ -215,6 +228,13 @@ pop_numbers :: proc() -> (a, b: f64, ok: bool) {
 		}
 	}
 	return 0, 0, runtime_error("Operands must be numbers.")
+}
+
+concatenate :: proc(a, b: ^String) {
+	text := strings.concatenate({a.data, b.data}, lox_allocator())
+	result := take_string(text)
+	pop_(); pop_()
+	push(result)
 }
 
 read_byte :: #force_inline proc "contextless" () -> byte {
@@ -298,7 +318,7 @@ capture_upvalue :: proc(slot: ^Value) -> ^Upvalue {
 	if uv != nil && uv.location == slot {
 		return uv
 	}
-	created_uv := upvalue_new(slot)
+	created_uv := new_upvalue(slot)
 	created_uv.next_open = uv
 	if prev_uv == nil {
 		vm.open_upvalues = created_uv
@@ -350,9 +370,9 @@ runtime_error :: proc(format: string, args: ..any) -> bool {
 
 define_native :: proc(name: string, arity: int, implementation: Native_Fn) {
 	// pushing on to the stack so that GC know we're still using them
-	name := string_copy(name)
+	name := copy_string(name)
 	push(name)
-	impl := native_new(arity, implementation)
+	impl := new_native(arity, implementation)
 	push(impl)
 	table_set(&vm.globals, name, impl)
 	pop_()

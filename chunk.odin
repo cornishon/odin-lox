@@ -12,7 +12,8 @@ Line :: struct {
 	count: u32,
 }
 
-chunk_init :: proc(ch: ^Chunk, allocator := context.allocator) -> ^Chunk {
+chunk_init :: proc(ch: ^Chunk) -> ^Chunk {
+	allocator := lox_allocator()
 	ch.code.allocator = allocator
 	ch.consts.allocator = allocator
 	ch.lines.allocator = allocator
@@ -27,6 +28,7 @@ chunk_deinit :: proc(ch: ^Chunk) {
 }
 
 chunk_add_const :: proc(ch: ^Chunk, value: Value) -> int {
+	push(value); defer pop_()
 	append(&ch.consts, value)
 	return len(ch.consts) - 1
 }

@@ -18,7 +18,7 @@ Precedence :: enum {
 	Primary,
 }
 
-Parse_Proc :: #type proc(can_assign: bool)
+Parse_Proc :: proc(can_assign: bool)
 
 Parse_Rule :: struct {
 	prefix: Parse_Proc,
@@ -34,7 +34,7 @@ Local :: struct {
 }
 
 @(private = "file")
-Upvalue :: struct {
+Upval :: struct {
 	index: u8,
 	is_local: bool,
 }
@@ -49,7 +49,7 @@ Compiler :: struct {
 	function: ^Function,
 	kind: Function_Kind,
 	locals: [dynamic; 256]Local,
-	upvalues: [dynamic; 256]Upvalue,
+	upvalues: [dynamic; 256]Upval,
 	scope_depth: int,
 	identifiers: Table,
 }
@@ -79,6 +79,13 @@ compile :: proc(source: string) -> (^Function, bool) {
 	}
 
 	return compiler_end(), !parser.had_error
+}
+
+mark_compiler_roots :: proc() {
+	for c := current; c != nil; c = c.enclosing {
+		mark_object(c.function)
+		mark_table(&c.identifiers)
+	}
 }
 
 current_chunk :: proc() -> ^Chunk {
@@ -177,9 +184,12 @@ patch_jump :: proc(offset: int) {
 
 compiler_init :: proc(compiler: ^Compiler, fun_kind: Function_Kind) {
 	compiler.enclosing = current
-	compiler.function = function_new(fun_kind == .Script ? "<script>" : parser.previous.text)
-	compiler.kind = fun_kind
 	current = compiler
+	current.kind = fun_kind
+	current.function = new_function()
+	if fun_kind != .Script {
+		current.function.name = copy_string(parser.previous.text)
+	}
 	append(&current.locals, Local{})
 }
 
@@ -189,7 +199,8 @@ compiler_end :: proc() -> ^Function {
 	table_destroy(&current.identifiers)
 	current = current.enclosing
 	when ODIN_DEBUG {
-		disassemble(&function.chunk, function.name.data)
+		name := function.name.data if function.name != nil else "<script>"
+		disassemble(&function.chunk, name)
 	}
 	return function
 }
@@ -209,7 +220,7 @@ end_scope :: proc() {
 }
 
 identifier_constant :: proc(token: Token) -> u8 {
-	name := string_copy(token.text)
+	name := copy_string(token.text)
 	if v, ok := table_get(&current.identifiers, name); ok {
 		return u8(v.(f64))
 	}
@@ -236,7 +247,7 @@ add_upvalue :: proc(compiler: ^Compiler, index: u8, is_local: bool) -> u8 {
 			return u8(i)
 		}
 	}
-	if append(&compiler.upvalues, Upvalue{index, is_local}) == 0 {
+	if append(&compiler.upvalues, Upval{index, is_local}) == 0 {
 		error("Too many closure variables in function.")
 		return 0
 	}
@@ -378,7 +389,8 @@ number :: proc(can_assign: bool) {
 
 string_ :: proc(can_assign: bool) {
 	s := parser.previous.text
-	emit_constant(string_copy(s[1:len(s) - 1]))
+	val := copy_string(s[1:len(s) - 1])
+	emit_constant(val)
 }
 
 variable :: proc(can_assign: bool) {

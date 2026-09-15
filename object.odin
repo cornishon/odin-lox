@@ -3,6 +3,7 @@ package olox
 
 import "core:fmt"
 import "core:hash"
+import "core:mem"
 import "core:strings"
 
 formatters: map[typeid]fmt.User_Formatter
@@ -24,6 +25,7 @@ delete_formatters :: proc() {
 
 Object :: struct {
 	next_obj: ^Object,
+	is_marked: bool,
 	variant: union {
 		^String,
 		^Function,
@@ -69,82 +71,95 @@ Upvalue :: struct {
 }
 
 obj_create :: proc($T: typeid) -> ^T {
-	o := new(T)
+	o := new(T, lox_allocator())
 	o.variant = o
 	o.next_obj = vm.objects
 	vm.objects = &o.obj
+	when DEBUG_LOG_GC {
+		fmt.printfln("%p allocate %d for %v", o, size_of(T), typeid_of(T))
+	}
 	return o
 }
 
 obj_destroy :: proc(o: ^Object) {
+	when DEBUG_LOG_GC {
+		fmt.printfln("%p free type %v", o, reflect.union_variant_typeid(o.variant))
+	}
+	context.allocator = lox_allocator()
 	switch v in o.variant {
 	case ^String:
 		delete(v.data)
+		// regular free() does not pass allocation size to the allocator procedure,
+		// which we rely on for tracking the total bytes allocated
+		delete(mem.ptr_to_bytes(v))
 	case ^Function:
 		chunk_deinit(&v.chunk)
+		delete(mem.ptr_to_bytes(v))
 	case ^Closure:
 		delete(v.upvalues)
+		delete(mem.ptr_to_bytes(v))
 	case ^Upvalue:
+		delete(mem.ptr_to_bytes(v))
 	case ^Native:
+		delete(mem.ptr_to_bytes(v))
 	}
-	free(o)
 }
 
-string_copy :: proc(text: string) -> ^String {
-	h := hash.fnv32(transmute([]u8)text)
-	interned := table_find_string(&vm.strings, text, h)
-	if interned != nil {
-		return interned
-	}
-	return _string_new(strings.clone(text), h)
-}
-
-string_concat :: proc(a, b: ^String) -> ^String {
-	text := strings.concatenate({a.data, b.data})
-	h := hash.fnv32(transmute([]u8)text)
-	interned := table_find_string(&vm.strings, text, h)
-	if interned != nil {
-		delete(text)
-		return interned
-	}
-	return _string_new(text, h)
-}
-
-@(private = "file")
-_string_new :: proc(text: string, hash: u32) -> ^String {
+allocate_string :: proc(text: string, hash: u32) -> ^String {
 	s := obj_create(String)
 	s.data = text
 	s.hash = hash
+	push(s); pop_()
 	table_set(&vm.strings, s, nil)
 	return s
 }
 
-function_new :: proc(name: string) -> ^Function {
+take_string :: proc(text: string) -> ^String {
+	h := hash.fnv32(transmute([]u8)text)
+	interned := table_find_string(&vm.strings, text, h)
+	if interned != nil {
+		delete(text, lox_allocator())
+		return interned
+	}
+	return allocate_string(text, h)
+}
+
+copy_string :: proc(text: string) -> ^String {
+	h := hash.fnv32(transmute([]u8)text)
+	interned := table_find_string(&vm.strings, text, h)
+	if interned != nil {
+		return interned
+	}
+	cloned := strings.clone(text, lox_allocator())
+	return allocate_string(cloned, h)
+}
+
+new_function :: proc() -> ^Function {
 	f := obj_create(Function)
-	f.name = string_copy(name)
+	push(f); defer pop_()
 	chunk_init(&f.chunk)
 	return f
 }
 
-closure_new :: proc(fn: ^Function) -> ^Closure {
-	upvalues := make([]^Upvalue, fn.upvalue_count)
+new_closure :: proc(fn: ^Function) -> ^Closure {
+	upvalues := make([]^Upvalue, fn.upvalue_count, lox_allocator())
 	o := obj_create(Closure)
 	o.function = fn
 	o.upvalues = upvalues
 	return o
 }
 
-upvalue_new :: proc(slot: ^Value) -> ^Upvalue {
+new_upvalue :: proc(slot: ^Value) -> ^Upvalue {
 	o := obj_create(Upvalue)
 	o.location = slot
 	return o
 }
 
-native_new :: proc(arity: int, f: Native_Fn) -> ^Native {
-	native := obj_create(Native)
-	native.arity = arity
-	native.call = f
-	return native
+new_native :: proc(arity: int, f: Native_Fn) -> ^Native {
+	o := obj_create(Native)
+	o.arity = arity
+	o.call = f
+	return o
 }
 
 obj_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
@@ -169,7 +184,11 @@ function_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 	v := arg.(^Function) or_return
 	switch verb {
 	case 'v', 's', 'q':
-		fi.n += fmt.wprintf(fi.writer, "<fun %s>", v.name.data)
+		if v.name != nil {
+			fi.n += fmt.wprintf(fi.writer, "<fun %s>", v.name.data)
+		} else {
+			fi.n += fmt.wprintf(fi.writer, "<script>")
+		}
 	case:
 		fi.ignore_user_formatters = true
 		fmt.fmt_value(fi, v, verb)
