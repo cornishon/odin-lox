@@ -51,6 +51,7 @@ mark_roots :: proc() {
 	}
 	mark_table(&vm.globals)
 	mark_compiler_roots()
+	mark_object(vm.init_string)
 }
 
 trace_references :: proc() {
@@ -94,11 +95,15 @@ blacken_object :: proc(obj: ^Object) {
 		}
 	case ^Class:
 		mark_object(v.name)
+		mark_table(&v.methods)
 	case ^Upvalue:
 		mark_value(v.closed)
 	case ^Instance:
 		mark_object(v.class)
 		mark_table(&v.fields)
+	case ^Bound_Method:
+		mark_value(v.receiver)
+		mark_object(v.method)
 	case ^String, ^Native:
 	}
 }
@@ -115,7 +120,7 @@ mark_object :: proc(o: ^Object) {
 	when DEBUG_LOG_GC {fmt.printfln("%p mark %v", o, o)}
 	o.is_marked = true
 	switch v in o.variant {
-	case ^Function, ^Closure, ^Upvalue, ^Class, ^Instance:
+	case ^Function, ^Closure, ^Upvalue, ^Class, ^Instance, ^Bound_Method:
 		append(&vm.gray_stack, o)
 	case ^String, ^Native:
 	}

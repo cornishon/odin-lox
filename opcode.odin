@@ -33,4 +33,5 @@ Opcode :: enum u8 {
 	NOT,
 	NEGATE,
 	CLASS,
+	METHOD,
 }

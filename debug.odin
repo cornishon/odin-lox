@@ -44,7 +44,14 @@ disassemble_instruction :: proc(
 	     .PRINT:
 		new_offset = simple_instruction(op, offset)
 
-	case .CONST, .DEF_GLOBAL, .GET_GLOBAL, .SET_GLOBAL, .CLASS, .GET_PROPERTY, .SET_PROPERTY:
+	case .CONST,
+	     .DEF_GLOBAL,
+	     .GET_GLOBAL,
+	     .SET_GLOBAL,
+	     .CLASS,
+	     .GET_PROPERTY,
+	     .SET_PROPERTY,
+	     .METHOD:
 		new_offset = constant_instruction(ch, op, offset)
 
 	case .GET_LOCAL, .SET_LOCAL, .GET_UPVALUE, .SET_UPVALUE, .CALL:

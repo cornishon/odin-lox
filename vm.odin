@@ -17,6 +17,7 @@ vm: struct {
 	open_upvalues: ^Upvalue,
 	strings: Table,
 	globals: Table,
+	init_string: ^String,
 	stdout: io.Writer,
 
 	// gc
@@ -45,9 +46,11 @@ vm_init :: proc(stdout: io.Writer, backing_allocator := context.allocator) {
 
 	vm.backing_allocator = backing_allocator
 	vm.gray_stack.allocator = backing_allocator
+
+	reset_stack()
+	vm.init_string = intern_string("init")
 	vm.next_gc = 1024 * 1024
 	vm.stdout = stdout
-	reset_stack()
 
 	define_native("clock", 0, proc(args: []Value) -> (Value, bool) {
 		clock := f64(time.tick_now()._nsec) / 1e9
@@ -62,16 +65,16 @@ vm_init :: proc(stdout: io.Writer, backing_allocator := context.allocator) {
 	})
 
 	define_native("typeof", 1, proc(args: []Value) -> (Value, bool) {
-		return copy_string(value_type(args[0])), true
+		return intern_string(value_type(args[0])), true
 	})
 }
 
 vm_destroy :: proc() {
 	io.flush(vm.stdout)
-	curr := vm.objects
 	table_destroy(&vm.globals)
 	table_destroy(&vm.strings)
-	for curr != nil {
+	vm.init_string = nil
+	for curr := vm.objects; curr != nil; {
 		next := curr.next_obj
 		obj_destroy(curr)
 		curr = next
@@ -167,12 +170,12 @@ run :: proc() -> bool {
 				return runtime_error("Only instances have properties.")
 			}
 			name := read_string()
-			value, ok := table_get(&instance.fields, name)
-			if !ok {
-				return runtime_error("Undefined property %q", name)
+			if value, ok := table_get(&instance.fields, name); ok {
+				pop_() // instance
+				push(value)
+			} else if !bind_method(instance.class, name) {
+				return false
 			}
-			pop_() // instance
-			push(value)
 
 		case .SET_PROPERTY:
 			instance, is_inst := value_as(Instance, peek(1))
@@ -269,6 +272,8 @@ run :: proc() -> bool {
 
 		case .CLASS:
 			push(new_class(read_string()))
+		case .METHOD:
+			define_method(read_string())
 		}
 	}
 }
@@ -347,8 +352,17 @@ call_value :: proc(callee: Value, argc: int) -> bool {
 			return call_closure(callable, argc)
 		case ^Function:
 			panic("tried to call a bare function")
+		case ^Bound_Method:
+			vm.stack_top[-argc - 1] = callable.receiver
+			return call_closure(callable.method, argc)
 		case ^Class:
 			vm.stack_top[-argc - 1] = new_instance(callable)
+			if val, ok := table_get(&callable.methods, vm.init_string); ok {
+				initializer := value_as(Closure, val) or_else panic("compilation error")
+				return call_closure(initializer, argc)
+			} else if argc != 0 {
+				return runtime_error("Expected 0 arguments but got %d.", argc)
+			}
 			return true
 		case ^Native:
 			if argc != callable.arity {
@@ -364,6 +378,18 @@ call_value :: proc(callee: Value, argc: int) -> bool {
 		}
 	}
 	return runtime_error("Can only call functions and classes, but got: %v", callee)
+}
+
+bind_method :: proc(class: ^Class, name: ^String) -> bool {
+	method, ok := table_get(&class.methods, name)
+	if !ok {
+		return runtime_error("Undefined property %q.", name)
+	}
+	closure := value_as(Closure, method) or_else panic("compilation error")
+	bound := new_bound_method(peek(0), closure)
+	pop_()
+	push(bound)
+	return true
 }
 
 capture_upvalue :: proc(slot: ^Value) -> ^Upvalue {
@@ -393,6 +419,13 @@ close_upvalues :: proc(last: ^Value) {
 		uv.location = &uv.closed
 		vm.open_upvalues = uv.next_open
 	}
+}
+
+define_method :: proc(name: ^String) {
+	method := peek(0)
+	class := value_as(Class, peek(1)) or_else panic("compilation error")
+	table_set(&class.methods, name, method)
+	pop_()
 }
 
 frame_chunk :: #force_inline proc "contextless" () -> ^Chunk {
@@ -428,7 +461,7 @@ runtime_error :: proc(format: string, args: ..any) -> bool {
 
 define_native :: proc(name: string, arity: int, implementation: Native_Fn) {
 	// pushing on to the stack so that GC know we're still using them
-	name := copy_string(name)
+	name := intern_string(name)
 	push(name)
 	impl := new_native(arity, implementation)
 	push(impl)

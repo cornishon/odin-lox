@@ -20,6 +20,7 @@ Object_Variant :: union {
 	^Upvalue,
 	^Class,
 	^Instance,
+	^Bound_Method,
 }
 
 String :: struct {
@@ -60,12 +61,19 @@ Upvalue :: struct {
 Class :: struct {
 	using obj: Object,
 	name: ^String,
+	methods: Table,
 }
 
 Instance :: struct {
 	using obj: Object,
 	class: ^Class,
 	fields: Table,
+}
+
+Bound_Method :: struct {
+	using obj: Object,
+	receiver: Value,
+	method: ^Closure,
 }
 
 obj_create :: proc($T: typeid) -> ^T {
@@ -101,9 +109,12 @@ obj_destroy :: proc(o: ^Object) {
 	case ^Native:
 		delete(mem.ptr_to_bytes(v))
 	case ^Class:
+		table_destroy(&v.methods)
 		delete(mem.ptr_to_bytes(v))
 	case ^Instance:
 		table_destroy(&v.fields)
+		delete(mem.ptr_to_bytes(v))
+	case ^Bound_Method:
 		delete(mem.ptr_to_bytes(v))
 	}
 }
@@ -127,7 +138,7 @@ take_string :: proc(text: string) -> ^String {
 	return allocate_string(text, h)
 }
 
-copy_string :: proc(text: string) -> ^String {
+intern_string :: proc(text: string) -> ^String {
 	h := hash.fnv32(transmute([]u8)text)
 	interned := table_find_string(&vm.strings, text, h)
 	if interned != nil {
@@ -148,6 +159,13 @@ new_closure :: proc(fn: ^Function) -> ^Closure {
 	o := obj_create(Closure)
 	o.function = fn
 	o.upvalues = upvalues
+	return o
+}
+
+new_bound_method :: proc(receiver: Value, method: ^Closure) -> ^Bound_Method {
+	o := obj_create(Bound_Method)
+	o.receiver = receiver
+	o.method = method
 	return o
 }
 
@@ -202,6 +220,12 @@ closure_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 	return true
 }
 
+beound_method_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+	v := arg.(^Bound_Method) or_return
+	fmt.fmt_value(fi, v.method.function, verb)
+	return true
+}
+
 upvalue_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 	v := arg.(^Upvalue) or_return
 	return variant_formatter(fi, v, verb, "upvalue")
@@ -250,6 +274,7 @@ set_formatters :: proc() {
 	fmt.register_user_formatter(^Function, function_formatter)
 	fmt.register_user_formatter(^Native, native_formatter)
 	fmt.register_user_formatter(^Closure, closure_formatter)
+	fmt.register_user_formatter(^Bound_Method, beound_method_formatter)
 	fmt.register_user_formatter(^Upvalue, upvalue_formatter)
 	fmt.register_user_formatter(^Class, class_formatter)
 }

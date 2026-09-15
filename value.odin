@@ -46,6 +46,8 @@ value_type :: proc(value: Value) -> string {
 			return "class" // maybe should be the class name?
 		case ^Instance:
 			return v.class.name.data
+		case ^Bound_Method:
+			return "method"
 		}
 	}
 	return "nil"

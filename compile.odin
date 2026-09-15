@@ -41,6 +41,8 @@ Upval :: struct {
 
 Function_Kind :: enum {
 	Function,
+	Method,
+	Initializer,
 	Script,
 }
 
@@ -52,6 +54,10 @@ Compiler :: struct {
 	upvalues: [dynamic; 256]Upval,
 	scope_depth: int,
 	identifiers: Table,
+}
+
+Class_Compiler :: struct {
+	enclosing: ^Class_Compiler,
 }
 
 Parser :: struct {
@@ -66,7 +72,9 @@ scanner: Scanner
 @(thread_local)
 parser: Parser
 @(thread_local)
-current: ^Compiler
+current_compiler: ^Compiler
+@(thread_local)
+current_class: ^Class_Compiler
 
 compile :: proc(source: string) -> (^Function, bool) {
 	scanner = scanner_init(source)
@@ -82,14 +90,14 @@ compile :: proc(source: string) -> (^Function, bool) {
 }
 
 mark_compiler_roots :: proc() {
-	for c := current; c != nil; c = c.enclosing {
+	for c := current_compiler; c != nil; c = c.enclosing {
 		mark_object(c.function)
 		mark_table(&c.identifiers)
 	}
 }
 
 current_chunk :: proc() -> ^Chunk {
-	return &current.function.chunk
+	return &current_compiler.function.chunk
 }
 
 error_at :: proc(token: Token, message: string) {
@@ -183,21 +191,32 @@ patch_jump :: proc(offset: int) {
 }
 
 compiler_init :: proc(compiler: ^Compiler, fun_kind: Function_Kind) {
-	compiler.enclosing = current
-	current = compiler
-	current.kind = fun_kind
-	current.function = new_function()
+	compiler.enclosing = current_compiler
+	current_compiler = compiler
+	current_compiler.kind = fun_kind
+	current_compiler.function = new_function()
 	if fun_kind != .Script {
-		current.function.name = copy_string(parser.previous.text)
+		current_compiler.function.name = intern_string(parser.previous.text)
 	}
-	append(&current.locals, Local{})
+	append(&current_compiler.locals, Local{})
+	if fun_kind != .Function {
+		current_compiler.locals[0].name.text = "this"
+	}
+}
+
+default_return :: proc() {
+	if current_compiler.kind == .Initializer {
+		emit(.GET_LOCAL, u8(0), .RETURN)
+	} else {
+		emit(.NIL, .RETURN)
+	}
 }
 
 compiler_end :: proc() -> ^Function {
-	emit(.NIL, .RETURN)
-	function := current.function
-	table_destroy(&current.identifiers)
-	current = current.enclosing
+	default_return()
+	function := current_compiler.function
+	table_destroy(&current_compiler.identifiers)
+	current_compiler = current_compiler.enclosing
 	when ODIN_DEBUG {
 		name := function.name.data if function.name != nil else "<script>"
 		disassemble(&function.chunk, name)
@@ -206,26 +225,26 @@ compiler_end :: proc() -> ^Function {
 }
 
 begin_scope :: proc() {
-	current.scope_depth += 1
+	current_compiler.scope_depth += 1
 }
 
 end_scope :: proc() {
-	current.scope_depth -= 1
-	for i := len(current.locals) - 1; i >= 0; i -= 1 {
-		local := current.locals[i]
-		if local.depth <= current.scope_depth {break}
+	current_compiler.scope_depth -= 1
+	for i := len(current_compiler.locals) - 1; i >= 0; i -= 1 {
+		local := current_compiler.locals[i]
+		if local.depth <= current_compiler.scope_depth {break}
 		emit(local.is_captured ? .CLOSE_UPVALUE : .POP)
-		pop(&current.locals)
+		pop(&current_compiler.locals)
 	}
 }
 
 identifier_constant :: proc(token: Token) -> u8 {
-	name := copy_string(token.text)
-	if v, ok := table_get(&current.identifiers, name); ok {
+	name := intern_string(token.text)
+	if v, ok := table_get(&current_compiler.identifiers, name); ok {
 		return u8(v.(f64))
 	}
 	idx := make_constant(name)
-	table_set(&current.identifiers, name, f64(idx))
+	table_set(&current_compiler.identifiers, name, f64(idx))
 	return idx
 }
 
@@ -268,16 +287,16 @@ resolve_local :: proc(compiler: ^Compiler, token: Token) -> (idx: u8, ok: bool) 
 }
 
 add_local :: proc(name: Token) {
-	if append(&current.locals, Local{name = name, depth = -1}) == 0 {
+	if append(&current_compiler.locals, Local{name = name, depth = -1}) == 0 {
 		error("Too many local variables in function.")
 	}
 }
 
 declare_variable :: proc() {
-	if current.scope_depth == 0 {return}
+	if current_compiler.scope_depth == 0 {return}
 	name := parser.previous
-	#reverse for local in current.locals {
-		if local.depth != -1 && local.depth < current.scope_depth {
+	#reverse for local in current_compiler.locals {
+		if local.depth != -1 && local.depth < current_compiler.scope_depth {
 			break
 		}
 		if name.text == local.name.text {
@@ -290,17 +309,17 @@ declare_variable :: proc() {
 parse_variable :: proc(error_message: string) -> u8 {
 	consume(.Identifier, error_message)
 	declare_variable()
-	if current.scope_depth > 0 {return 0}
+	if current_compiler.scope_depth > 0 {return 0}
 	return identifier_constant(parser.previous)
 }
 
 mark_initialized :: proc() {
-	if current.scope_depth == 0 {return}
-	slice.last_ptr(current.locals[:]).depth = current.scope_depth
+	if current_compiler.scope_depth == 0 {return}
+	slice.last_ptr(current_compiler.locals[:]).depth = current_compiler.scope_depth
 }
 
 define_variable :: proc(global: u8) {
-	if current.scope_depth > 0 {
+	if current_compiler.scope_depth > 0 {
 		mark_initialized()
 	} else {
 		emit(.DEF_GLOBAL, global)
@@ -400,7 +419,7 @@ number :: proc(can_assign: bool) {
 
 string_ :: proc(can_assign: bool) {
 	s := parser.previous.text
-	val := copy_string(s[1:len(s) - 1])
+	val := intern_string(s[1:len(s) - 1])
 	emit_constant(val)
 }
 
@@ -408,13 +427,21 @@ variable :: proc(can_assign: bool) {
 	named_variable(parser.previous, can_assign)
 }
 
+this :: proc(can_assign: bool) {
+	if current_class == nil {
+		error("Can't use 'this' outside of a class.")
+		return
+	}
+	variable(false)
+}
+
 named_variable :: proc(name: Token, can_assign: bool) {
 	get, set: Opcode
-	arg, ok := resolve_local(current, name)
+	arg, ok := resolve_local(current_compiler, name)
 	if ok {
 		get = .GET_LOCAL
 		set = .SET_LOCAL
-	} else if arg, ok = resolve_upvalue(current, name); ok {
+	} else if arg, ok = resolve_upvalue(current_compiler, name); ok {
 		get = .GET_UPVALUE
 		set = .SET_UPVALUE
 	} else {
@@ -447,6 +474,7 @@ rules := #partial [Token_Kind]Parse_Rule {
 	.Nil           = { literal,  nil,    .None       },
 	.True          = { literal,  nil,    .None       },
 	.False         = { literal,  nil,    .None       },
+	.This          = { this,     nil,    .None       },
 	.Bang          = { unary,    nil,    .None       },
 	.Identifier    = { variable, nil,    .None       },
 	.String        = { string_,  nil,    .None       },
@@ -509,8 +537,8 @@ function :: proc(kind: Function_Kind) {
 	consume(.Left_Paren, "Expected '(' after function name.")
 	for {
 		if check(.Right_Paren) {break}
-		current.function.arity += 1
-		if current.function.arity > 255 {
+		current_compiler.function.arity += 1
+		if current_compiler.function.arity > 255 {
 			error_at_current("Can't have mre than 255 parameters.")
 		}
 		id := parse_variable("Expected parameter name.")
@@ -529,6 +557,13 @@ function :: proc(kind: Function_Kind) {
 	}
 }
 
+method :: proc() {
+	consume(.Identifier, "Expected method name.")
+	name := identifier_constant(parser.previous)
+	function(parser.previous.text == "init" ? .Initializer : .Method)
+	emit(.METHOD, name)
+}
+
 fun_declaration :: proc() {
 	id := parse_variable("Expect function name.")
 	mark_initialized()
@@ -538,14 +573,27 @@ fun_declaration :: proc() {
 
 class_declaration :: proc() {
 	consume(.Identifier, "Expected class name.")
-	name := identifier_constant(parser.previous)
+	class_name := parser.previous
+	id := identifier_constant(class_name)
 	declare_variable()
 
-	emit(.CLASS, name)
-	define_variable(name)
+	emit(.CLASS, id)
+	define_variable(id)
 
+	class_compiler: Class_Compiler
+	class_compiler.enclosing = current_class
+	current_class = &class_compiler
+
+	// load onto the stack so `method` can find it
+	named_variable(class_name, false)
 	consume(.Left_Brace, "Expect '{' before class body.")
+	for !check(.Right_Brace) && !check(.Eof) {
+		method()
+	}
 	consume(.Right_Brace, "Expect '}' after class body.")
+	emit(.POP)
+
+	current_class = current_class.enclosing
 }
 
 var_declaration :: proc() {
@@ -635,16 +683,19 @@ print_statement :: proc() {
 }
 
 return_statement :: proc() {
-	if current.kind == .Script {
+	if current_compiler.kind == .Script {
 		error("Can't return from top-level code.")
 	}
-	if check(.Semicolon) {
-		emit(.NIL)
+	if match(.Semicolon) {
+		default_return()
 	} else {
+		if current_compiler.kind == .Initializer {
+			error("Can't return a value from initializer.")
+		}
 		expression()
+		consume(.Semicolon, "Expected ';' after return value.")
+		emit(.RETURN)
 	}
-	consume(.Semicolon, "Expected ';' after return value.")
-	emit(.RETURN)
 }
 
 while_statement :: proc() {
