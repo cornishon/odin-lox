@@ -218,7 +218,7 @@ compiler_end :: proc() -> ^Function {
 	function := current_compiler.function
 	table_destroy(&current_compiler.identifiers)
 	current_compiler = current_compiler.enclosing
-	when ODIN_DEBUG {
+	when DEBUG_PRINT_CODE {
 		name := function.name.data if function.name != nil else "<script>"
 		disassemble(&function.chunk, name)
 	}
