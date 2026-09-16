@@ -66,11 +66,10 @@ table_find_string :: proc(
 	found: bool,
 ) #optional_ok {
 	if table.used == 0 {return}
-	capacity := len(table.entries)
-	index := int(hash) % capacity
-	for {
-		entry := &table.entries[index]
-		index = (index + 1) % capacity
+	mask := len(table.entries) - 1
+
+	for i := int(hash) & mask;; i = (i + 1) & mask {
+		entry := &table.entries[i]
 		if entry.key == nil {
 			if entry.value == nil {return} 	// stop if we find an empty non-tombstone entry
 		} else if entry.key.hash == hash && entry.key.data == str {
@@ -95,12 +94,10 @@ mark_table :: proc(t: ^Table) {
 }
 
 _find_slot :: proc(entries: []Entry, key: ^String) -> ^Entry {
-	capacity := len(entries)
-	index := int(key.hash) % capacity
+	mask := len(entries) - 1
 	tombstone: Maybe(^Entry)
-	for {
-		entry := &entries[index]
-		index = (index + 1) % capacity
+	for i := int(key.hash) & mask;; i = (i + 1) & mask {
+		entry := &entries[i]
 		if entry.key == nil {
 			if entry.value == nil {
 				// on empty entry return the first tombstone we've seen
