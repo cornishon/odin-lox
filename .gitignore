@@ -1,4 +1,5 @@
 *.svg
 build/
 perf.data*
+profile*
 *.spall
