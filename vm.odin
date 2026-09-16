@@ -48,6 +48,8 @@ vm_init :: proc(stdout: io.Writer, backing_allocator := context.allocator) {
 	vm.gray_stack.allocator = backing_allocator
 
 	reset_stack()
+	table_init(&vm.globals)
+	table_init(&vm.strings)
 	vm.init_string = intern_string("init")
 	vm.next_gc = 1024 * 1024
 	vm.stdout = stdout

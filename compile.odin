@@ -200,6 +200,7 @@ compiler_init :: proc(compiler: ^Compiler, fun_kind: Function_Kind) {
 		current_compiler.function.name = intern_string(parser.previous.text)
 	}
 	append(&current_compiler.locals, Local{})
+	table_init(&current_compiler.identifiers)
 	if fun_kind != .Function {
 		current_compiler.locals[0].name.text = "this"
 	}

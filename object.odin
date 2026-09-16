@@ -172,12 +172,14 @@ new_bound_method :: proc(receiver: Value, method: ^Closure) -> ^Bound_Method {
 new_class :: proc(name: ^String) -> ^Class {
 	o := obj_create(Class)
 	o.name = name
+	table_init(&o.methods)
 	return o
 }
 
 new_instance :: proc(class: ^Class) -> ^Instance {
 	o := obj_create(Instance)
 	o.class = class
+	table_init(&o.fields)
 	return o
 }
 

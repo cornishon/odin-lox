@@ -12,6 +12,10 @@ Table :: struct {
 	used: int,
 }
 
+table_init :: proc(table: ^Table) {
+	// nothing
+}
+
 table_destroy :: proc(table: ^Table) {
 	delete(table.entries, lox_allocator())
 	table^ = {}
