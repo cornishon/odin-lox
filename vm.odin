@@ -282,6 +282,30 @@ run :: proc() -> bool {
 
 		case .METHOD:
 			define_method(read_string())
+
+		case .INHERIT:
+			superclass, is_class := value_as(Class, peek(1))
+			if !is_class {
+				return runtime_error("Superclass must be a class.")
+			}
+			subclass := value_as(Class, peek(0)) or_else panic("miscompilation")
+			table_add_all(superclass.methods, &subclass.methods)
+			pop_() // subclass
+
+		case .GET_SUPER:
+			name := read_string()
+			superclass := value_as(Class, pop_()) or_else panic("miscompilation")
+			if !bind_method(superclass, name) {
+				return false
+			}
+
+		case .SUPER_INVOKE:
+			method := read_string()
+			argc := int(read_byte())
+			superclass := value_as(Class, pop_()) or_else panic("miscompilation")
+			if !invoke_from_class(superclass, method, argc) {
+				return false
+			}
 		}
 	}
 }
@@ -366,7 +390,7 @@ call_value :: proc(callee: Value, argc: int) -> bool {
 		case ^Class:
 			vm.stack_top[-argc - 1] = new_instance(callable)
 			if val, ok := table_get(&callable.methods, vm.init_string); ok {
-				initializer := value_as(Closure, val) or_else panic("compilation error")
+				initializer := value_as(Closure, val) or_else panic("miscompilation")
 				return call_closure(initializer, argc)
 			} else if argc != 0 {
 				return runtime_error("Expected 0 arguments but got %d.", argc)
@@ -402,7 +426,7 @@ invoke :: proc(name: ^String, argc: int) -> bool {
 
 invoke_from_class :: proc(class: ^Class, name: ^String, argc: int) -> bool {
 	if val, ok := table_get(&class.methods, name); ok {
-		method := value_as(Closure, val) or_else panic("compilation error")
+		method := value_as(Closure, val) or_else panic("miscompilation")
 		return call_closure(method, argc)
 	}
 	return runtime_error("Undefined property %q.", name)
@@ -413,7 +437,7 @@ bind_method :: proc(class: ^Class, name: ^String) -> bool {
 	if !ok {
 		return runtime_error("Undefined property %q.", name)
 	}
-	closure := value_as(Closure, method) or_else panic("compilation error")
+	closure := value_as(Closure, method) or_else panic("miscompilation")
 	bound := new_bound_method(peek(0), closure)
 	pop_()
 	push(bound)
@@ -451,7 +475,7 @@ close_upvalues :: proc(last: ^Value) {
 
 define_method :: proc(name: ^String) {
 	method := peek(0)
-	class := value_as(Class, peek(1)) or_else panic("compilation error")
+	class := value_as(Class, peek(1)) or_else panic("miscompilation")
 	table_set(&class.methods, name, method)
 	pop_()
 }

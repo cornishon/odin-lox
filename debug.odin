@@ -41,6 +41,7 @@ disassemble_instruction :: proc(
 	     .NOT,
 	     .NEGATE,
 	     .CLOSE_UPVALUE,
+	     .INHERIT,
 	     .PRINT:
 		new_offset = simple_instruction(op, offset)
 
@@ -51,6 +52,7 @@ disassemble_instruction :: proc(
 	     .CLASS,
 	     .GET_PROPERTY,
 	     .SET_PROPERTY,
+	     .GET_SUPER,
 	     .METHOD:
 		new_offset = constant_instruction(ch, op, offset)
 
@@ -77,7 +79,7 @@ disassemble_instruction :: proc(
 		}
 		new_offset = offset + 2 + 2 * fn.upvalue_count
 
-	case .INVOKE:
+	case .INVOKE, .SUPER_INVOKE:
 		new_offset = invoke_instruction(ch, op, offset)
 
 	case:

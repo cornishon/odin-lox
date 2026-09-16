@@ -58,6 +58,7 @@ Compiler :: struct {
 
 Class_Compiler :: struct {
 	enclosing: ^Class_Compiler,
+	has_superclass: bool,
 }
 
 Parser :: struct {
@@ -478,6 +479,7 @@ rules := #partial [Token_Kind]Parse_Rule {
 	.True          = { literal,  nil,    .None       },
 	.False         = { literal,  nil,    .None       },
 	.This          = { this,     nil,    .None       },
+	.Super         = { super,    nil,    .None       },
 	.Bang          = { unary,    nil,    .None       },
 	.Identifier    = { variable, nil,    .None       },
 	.String        = { string_,  nil,    .None       },
@@ -568,10 +570,34 @@ method :: proc() {
 }
 
 fun_declaration :: proc() {
-	id := parse_variable("Expect function name.")
+	id := parse_variable("Expected function name.")
 	mark_initialized()
 	function(.Function)
 	define_variable(id)
+}
+
+synthetic_token :: proc(text: string) -> Token {
+	return {text = text}
+}
+
+super :: proc(can_assign: bool) {
+	if current_class == nil {
+		error("Can't use 'super' outside of a class.")
+	} else if !current_class.has_superclass {
+		error("Cant' use 'super' in a class with no superclass.")
+	}
+	consume(.Dot, "Expected '.' after 'super'.")
+	consume(.Identifier, "Expected superclass method name.")
+	id := identifier_constant(parser.previous)
+	named_variable(synthetic_token("this"), false)
+	if match(.Left_Paren) {
+		argc := argument_list()
+		named_variable(synthetic_token("super"), false)
+		emit(.SUPER_INVOKE, id, argc)
+	} else {
+		named_variable(synthetic_token("super"), false)
+		emit(.GET_SUPER, id)
+	}
 }
 
 class_declaration :: proc() {
@@ -587,15 +613,34 @@ class_declaration :: proc() {
 	class_compiler.enclosing = current_class
 	current_class = &class_compiler
 
+	if match(.Less) {
+		consume(.Identifier, "Expected superclass name.")
+		variable(false)
+		if class_name.text == parser.previous.text {
+			error("A class can't inherit from itself.")
+		}
+
+		begin_scope()
+		add_local(synthetic_token("super"))
+		define_variable(0)
+
+		named_variable(class_name, false)
+		emit(.INHERIT)
+		class_compiler.has_superclass = true
+	}
+
 	// load onto the stack so `method` can find it
 	named_variable(class_name, false)
-	consume(.Left_Brace, "Expect '{' before class body.")
+	consume(.Left_Brace, "Expected '{' before class body.")
 	for !check(.Right_Brace) && !check(.Eof) {
 		method()
 	}
-	consume(.Right_Brace, "Expect '}' after class body.")
+	consume(.Right_Brace, "Expected '}' after class body.")
 	emit(.POP)
 
+	if class_compiler.has_superclass {
+		end_scope()
+	}
 	current_class = current_class.enclosing
 }
 

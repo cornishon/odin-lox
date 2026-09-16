@@ -49,6 +49,14 @@ table_remove :: proc(table: ^Table, key: ^String) -> (existed: bool) {
 	return true
 }
 
+table_add_all :: proc(source: Table, dest: ^Table) {
+	for e in source.entries {
+		if e.key != nil {
+			table_set(dest, e.key, e.value)
+		}
+	}
+}
+
 table_find_string :: proc(
 	table: ^Table,
 	str: string,

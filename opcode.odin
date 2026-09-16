@@ -17,9 +17,11 @@ Opcode :: enum u8 {
 	SET_UPVALUE,
 	GET_PROPERTY,
 	SET_PROPERTY,
+	GET_SUPER,
 	LOOP,
 	CALL,
 	INVOKE,
+	SUPER_INVOKE,
 	CLOSURE,
 	CLOSE_UPVALUE,
 	JUMP,
@@ -35,4 +37,5 @@ Opcode :: enum u8 {
 	NEGATE,
 	CLASS,
 	METHOD,
+	INHERIT,
 }
