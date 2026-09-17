@@ -1,7 +1,5 @@
 package olox
 
-// key == nil && value == nil: EMPTY
-// key == nil && value != nil: TOMBSTONE
 Entry :: struct {
 	key: ^String,
 	value: Value,
@@ -11,6 +9,11 @@ Table :: struct {
 	entries: []Entry,
 	used: int,
 }
+
+@(private = "file")
+EMPTY :: (^String)(uintptr(0))
+@(private = "file")
+TOMBSTONE :: (^String)(uintptr(1))
 
 table_init :: proc(table: ^Table) {
 	// nothing
@@ -26,12 +29,9 @@ table_set :: proc(table: ^Table, key: ^String, value: Value) -> (is_new: bool) {
 		capacity := len(table.entries) == 0 ? 8 : len(table.entries) * 2
 		_table_grow(table, capacity)
 	}
-
 	entry := _find_slot(table.entries, key)
-	is_new = entry.key == nil
-	if is_new && entry.value == nil {
-		table.used += 1
-	}
+	is_new = entry.key <= TOMBSTONE
+	table.used += int(entry.key == EMPTY)
 	entry.key = key
 	entry.value = value
 	return
@@ -40,22 +40,21 @@ table_set :: proc(table: ^Table, key: ^String, value: Value) -> (is_new: bool) {
 table_get :: proc(table: ^Table, key: ^String) -> (value: Value, ok: bool) #optional_ok {
 	if len(table.entries) == 0 {return}
 	entry := _find_slot(table.entries, key)
-	if entry.key == nil {return}
+	if entry.key <= TOMBSTONE {return}
 	return entry.value, true
 }
 
 table_remove :: proc(table: ^Table, key: ^String) -> (existed: bool) {
 	if len(table.entries) == 0 {return}
 	entry := _find_slot(table.entries, key)
-	if entry.key == nil {return}
-	entry.key = nil
-	entry.value = true
+	if entry.key <= TOMBSTONE {return}
+	entry.key = TOMBSTONE
 	return true
 }
 
 table_add_all :: proc(source: Table, dest: ^Table) {
 	for e in source.entries {
-		if e.key != nil {
+		if e.key > TOMBSTONE {
 			table_set(dest, e.key, e.value)
 		}
 	}
@@ -72,19 +71,18 @@ table_find_string :: proc(
 	if table.used == 0 {return}
 	mask := len(table.entries) - 1
 
-	for i := int(hash) & mask;; i = (i + 1) & mask {
-		entry := &table.entries[i]
-		if entry.key == nil {
-			if entry.value == nil {return} 	// stop if we find an empty non-tombstone entry
-		} else if entry.key.hash == hash && entry.key.data == str {
-			return entry.key, true
+	#no_bounds_check for i := int(hash) & mask;; i = (i + 1) & mask {
+		ek := table.entries[i].key
+		if ek == EMPTY {return} 	// stop if we find an empty non-tombstone entry
+		if ek > TOMBSTONE && ek.hash == hash && ek.data == str {
+			return ek, true
 		}
 	}
 }
 
 table_remove_white :: proc(table: ^Table) {
 	for e in table.entries {
-		if e.key != nil && !e.key.is_marked {
+		if e.key > TOMBSTONE && !e.key.is_marked {
 			table_remove(table, e.key)
 		}
 	}
@@ -100,10 +98,10 @@ mark_table :: proc(t: ^Table) {
 _find_slot :: proc(entries: []Entry, key: ^String) -> ^Entry {
 	mask := len(entries) - 1
 	tombstone: Maybe(^Entry)
-	for i := int(key.hash) & mask;; i = (i + 1) & mask {
+	#no_bounds_check for i := int(key.hash) & mask;; i = (i + 1) & mask {
 		entry := &entries[i]
-		if entry.key == nil {
-			if entry.value == nil {
+		if entry.key <= TOMBSTONE {
+			if entry.key == EMPTY {
 				// on empty entry return the first tombstone we've seen
 				// so table_set can overwrite it
 				return tombstone.? or_else entry
@@ -124,7 +122,7 @@ _table_grow :: proc(table: ^Table, new_capacity: int) {
 
 	table.used = 0
 	for e in table.entries {
-		if e.key != nil {
+		if e.key > TOMBSTONE {
 			_find_slot(new_entries, e.key)^ = e
 			table.used += 1
 		}
