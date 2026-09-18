@@ -11,7 +11,7 @@ _ :: reflect
 
 HEAP_GROW_FACTOR :: 2
 
-lox_allocator :: proc() -> mem.Allocator {
+lox_allocator :: proc "contextless" () -> mem.Allocator {
 	return {
 		procedure = _lox_allocator_proc,
 	}

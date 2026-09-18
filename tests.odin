@@ -1,3 +1,4 @@
+#+test
 package olox
 
 import "core:fmt"
@@ -35,15 +36,17 @@ run_file :: proc(t: ^testing.T, loxpath: string, temp := context.temp_allocator)
 	stderr, err = os.read_entire_file(errpath, temp)
 	if (err != nil) {log.errorf("%s: %s", errpath, os.error_string(err))}
 	if len(stderr) == 0 {
+		log.info(loxpath)
 		expect_output(t, string(stdout), string(source))
 	}
 }
 
 expect_output :: proc(t: ^testing.T, expected: string, source: string) {
-	b: strings.Builder; defer strings.builder_destroy(&b)
-	vm_init(strings.to_writer(&b)); defer vm_destroy()
+	b := strings.builder_init(&{})
+	defer strings.builder_destroy(b)
+	vm_init(strings.to_writer(b)); defer vm_destroy()
 	testing.expect(t, vm_interpret(source))
-	actual := strings.to_string(b)
+	actual := strings.to_string(b^)
 	testing.expect_value(t, actual, expected)
 }
 

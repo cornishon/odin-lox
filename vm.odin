@@ -1,5 +1,6 @@
 package olox
 
+import "base:runtime"
 import "core:fmt"
 import "core:io"
 import "core:math"
@@ -19,6 +20,7 @@ vm: struct {
 	globals: Table,
 	init_string: ^String,
 	stdout: io.Writer,
+	ctx: runtime.Context,
 
 	// gc
 	bytes_allocated: int,
@@ -38,6 +40,8 @@ Call_Frame :: struct {
 	closure: ^Closure,
 	ip: [^]u8,
 	slots: [^]Value,
+	consts: [^]Value,
+	upvalues: [^]^Upvalue,
 }
 
 vm_init :: proc(stdout: io.Writer, backing_allocator := context.allocator) {
@@ -47,6 +51,9 @@ vm_init :: proc(stdout: io.Writer, backing_allocator := context.allocator) {
 	vm.backing_allocator = backing_allocator
 	vm.gray_stack.allocator = backing_allocator
 
+	vm.ctx = context
+	vm.ctx.allocator = lox_allocator()
+
 	reset_stack()
 	table_init(&vm.globals)
 	table_init(&vm.strings)
@@ -54,19 +61,19 @@ vm_init :: proc(stdout: io.Writer, backing_allocator := context.allocator) {
 	vm.next_gc = 1024 * 1024
 	vm.stdout = stdout
 
-	define_native("clock", 0, proc(args: []Value) -> (Value, bool) {
+	define_native("clock", 0, proc "contextless" (args: []Value) -> (Value, bool) {
 		clock := f64(time.tick_now()._nsec) / 1e9
 		return clock, true
 	})
 
-	define_native("sqrt", 1, proc(args: []Value) -> (Value, bool) {
+	define_native("sqrt", 1, proc "contextless" (args: []Value) -> (Value, bool) {
 		if x, is_num := args[0].(f64); is_num && x >= 0 {
 			return math.sqrt(x), true
 		}
 		return 0, runtime_error("Argument must be a non-negative number, but got: %q", args[0])
 	})
 
-	define_native("typeof", 1, proc(args: []Value) -> (Value, bool) {
+	define_native("typeof", 1, proc "contextless" (args: []Value) -> (Value, bool) {
 		return intern_string(value_type(args[0])), true
 	})
 }
@@ -94,258 +101,8 @@ vm_interpret :: proc(source: string) -> bool {
 	pop_()
 	push(c)
 	call_closure(c, 0)
-	return run()
-}
-
-run :: proc() -> bool {
-	for {
-		op := Opcode(read_byte())
-		switch op {
-		case .NIL:
-			push(nil)
-
-		case .FALSE:
-			push(false)
-
-		case .TRUE:
-			push(true)
-
-		case .POP:
-			pop_()
-
-		case .RETURN:
-			result := pop_()
-			close_upvalues(vm.frame.slots)
-			if vm.frame_count -= 1; vm.frame_count == 0 {
-				pop_()
-				return true
-			}
-			vm.stack_top = vm.frame.slots
-			push(result)
-			vm.frame = &vm.frames[vm.frame_count - 1]
-
-		case .CONST:
-			push(read_const())
-
-		case .PRINT:
-			fmt.wprintln(vm.stdout, pop_())
-
-		case .GET_LOCAL:
-			slot := read_byte()
-			push(vm.frame.slots[slot])
-
-		case .SET_LOCAL:
-			slot := read_byte()
-			vm.frame.slots[slot] = peek(0)
-
-		case .DEF_GLOBAL:
-			name := read_string()
-			table_set(&vm.globals, name, peek(0))
-			pop_()
-
-		case .GET_GLOBAL:
-			name := read_string()
-			if v, ok := table_get(&vm.globals, name); ok {
-				push(v)
-			} else {
-				return runtime_error("Undefined variable '%s'", name)
-			}
-
-		case .SET_GLOBAL:
-			name := read_string()
-			if table_set(&vm.globals, name, peek(0)) {
-				table_remove(&vm.globals, name)
-				return runtime_error("Undefined variable '%s'", name)
-			}
-
-		case .GET_UPVALUE:
-			slot := read_byte()
-			push(vm.frame.closure.upvalues[slot].location^)
-
-		case .SET_UPVALUE:
-			slot := read_byte()
-			vm.frame.closure.upvalues[slot].location^ = peek(0)
-
-		case .GET_PROPERTY:
-			instance, is_inst := value_as(Instance, peek(0))
-			if !is_inst {
-				return runtime_error("Only instances have properties.")
-			}
-			name := read_string()
-			if value, ok := table_get(&instance.fields, name); ok {
-				pop_() // instance
-				push(value)
-			} else if !bind_method(instance.class, name) {
-				return false
-			}
-
-		case .SET_PROPERTY:
-			instance, is_inst := value_as(Instance, peek(1))
-			if !is_inst {
-				return runtime_error("Only instances have properties.")
-			}
-			table_set(&instance.fields, read_string(), peek(0))
-			value := pop_()
-			pop_()
-			push(value)
-
-		case .CALL:
-			argc := int(read_byte())
-			if !call_value(peek(argc), argc) {
-				return false
-			}
-
-		case .INVOKE:
-			method := read_string()
-			argc := int(read_byte())
-			if !invoke(method, argc) {
-				return false
-			}
-
-		case .CLOSE_UPVALUE:
-			close_upvalues(&vm.stack_top[-1])
-			pop_()
-
-		case .CLOSURE:
-			fn := read_const().(^Object).variant.(^Function)
-			cl := new_closure(fn)
-			push(cl)
-			for &uv in cl.upvalues {
-				is_local := bool(read_byte())
-				index := read_byte()
-				if is_local {
-					uv = capture_upvalue(&vm.frame.slots[index])
-				} else {
-					uv = vm.frame.closure.upvalues[index]
-				}
-			}
-
-		case .LOOP:
-			offset := read_short()
-			vm.frame.ip = vm.frame.ip[-offset:]
-
-		case .JUMP:
-			offset := read_short()
-			vm.frame.ip = vm.frame.ip[offset:]
-
-		case .JUMP_IF_NOT:
-			offset := read_short()
-			if value_is_falsey(peek(0)) {
-				vm.frame.ip = vm.frame.ip[offset:]
-			}
-
-		case .EQUAL:
-			b := pop_()
-			a := pop_()
-			push(a == b)
-
-		case .LESS:
-			a, b := pop_numbers() or_return
-			push(a < b)
-
-		case .GREATER:
-			a, b := pop_numbers() or_return
-			push(a > b)
-
-		case .ADD:
-			if b, b_ok := value_as(String, peek(0)); b_ok {
-				if a, a_ok := value_as(String, peek(1)); a_ok {
-					concatenate(a, b)
-					continue
-				}
-			}
-			a, b := pop_numbers() or_return
-			push(a + b)
-
-		case .SUB:
-			a, b := pop_numbers() or_return
-			push(a - b)
-
-		case .MUL:
-			a, b := pop_numbers() or_return
-			push(a * b)
-
-		case .DIV:
-			a, b := pop_numbers() or_return
-			push(a / b)
-
-		case .NOT:
-			push(value_is_falsey(pop_()))
-
-		case .NEGATE:
-			if n, ok := peek(0).(f64); ok {
-				pop_(); push(-n)
-			} else {
-				return runtime_error("Operand must be a number.")
-			}
-
-		case .CLASS:
-			push(new_class(read_string()))
-
-		case .METHOD:
-			define_method(read_string())
-
-		case .INHERIT:
-			superclass, is_class := value_as(Class, peek(1))
-			if !is_class {
-				return runtime_error("Superclass must be a class.")
-			}
-			subclass := value_as(Class, peek(0)) or_else panic("miscompilation")
-			table_add_all(superclass.methods, &subclass.methods)
-			pop_() // subclass
-
-		case .GET_SUPER:
-			name := read_string()
-			superclass := value_as(Class, pop_()) or_else panic("miscompilation")
-			if !bind_method(superclass, name) {
-				return false
-			}
-
-		case .SUPER_INVOKE:
-			method := read_string()
-			argc := int(read_byte())
-			superclass := value_as(Class, pop_()) or_else panic("miscompilation")
-			if !invoke_from_class(superclass, method, argc) {
-				return false
-			}
-		}
-	}
-}
-
-pop_numbers :: proc() -> (a, b: f64, ok: bool) {
-	a_ok, b_ok: bool
-	if b, b_ok = peek(0).(f64); b_ok {
-		if a, a_ok = peek(1).(f64); a_ok {
-			vm.stack_top = vm.stack_top[-2:]
-			return a, b, true
-		}
-	}
-	return 0, 0, runtime_error("Operands must be numbers.")
-}
-
-concatenate :: proc(a, b: ^String) {
-	text := strings.concatenate({a.data, b.data}, lox_allocator())
-	result := take_string(text)
-	pop_(); pop_()
-	push(result)
-}
-
-read_byte :: #force_inline proc "contextless" () -> byte {
-	defer vm.frame.ip = vm.frame.ip[1:]
-	return vm.frame.ip[0]
-}
-
-read_short :: #force_inline proc "contextless" () -> u16 {
-	defer vm.frame.ip = vm.frame.ip[2:]
-	return u16(vm.frame.ip[0]) << 8 | u16(vm.frame.ip[1])
-}
-
-read_const :: #force_inline proc "contextless" () -> Value {
-	return frame_chunk().consts[read_byte()]
-}
-
-read_string :: #force_inline proc "contextless" () -> ^String {
-	return read_const().(^Object).variant.(^String)
+	f := &vm.frames[vm.frame_count - 1]
+	return exec(vm.stack_top, f.ip, f.consts, f.slots, f.upvalues)
 }
 
 push :: #force_inline proc "contextless" (value: Value) {
@@ -362,7 +119,7 @@ peek :: #force_inline proc "contextless" (distance: int) -> Value {
 	return vm.stack_top[-distance - 1]
 }
 
-call_closure :: proc(c: ^Closure, argc: int) -> bool {
+call_closure :: proc "contextless" (c: ^Closure, argc: int) -> bool {
 	if argc != c.function.arity {
 		return runtime_error("Expected %d arguments but got %d.", c.function.arity, argc)
 	}
@@ -375,24 +132,26 @@ call_closure :: proc(c: ^Closure, argc: int) -> bool {
 		closure = c,
 		ip = raw_data(c.function.chunk.code),
 		slots = vm.stack_top[-argc - 1:],
+		consts = raw_data(c.function.chunk.consts),
+		upvalues = raw_data(c.upvalues),
 	}
 	return true
 }
 
-call_value :: proc(callee: Value, argc: int) -> bool {
+call_value :: proc "contextless" (callee: Value, argc: int) -> bool {
 	if obj, is_obj := callee.(^Object); is_obj {
 		switch callable in obj.variant {
 		case ^Closure:
 			return call_closure(callable, argc)
 		case ^Function:
-			panic("tried to call a bare function")
+			panic_contextless("tried to call a bare function")
 		case ^Bound_Method:
 			vm.stack_top[-argc - 1] = callable.receiver
 			return call_closure(callable.method, argc)
 		case ^Class:
 			vm.stack_top[-argc - 1] = new_instance(callable)
 			if val, ok := table_get(&callable.methods, vm.init_string); ok {
-				initializer := value_as(Closure, val) or_else panic("miscompilation")
+				initializer := value_as(Closure, val)
 				return call_closure(initializer, argc)
 			} else if argc != 0 {
 				return runtime_error("Expected 0 arguments but got %d.", argc)
@@ -411,10 +170,10 @@ call_value :: proc(callee: Value, argc: int) -> bool {
 		case ^Upvalue:
 		}
 	}
-	return runtime_error("Can only call functions and classes, but got: %v", callee)
+	return runtime_error("Can only call functions and classes, but got: %v", value_type(callee))
 }
 
-invoke :: proc(name: ^String, argc: int) -> bool {
+invoke :: proc "contextless" (name: ^String, argc: int) -> bool {
 	receiver := peek(argc)
 	if instance, ok := value_as(Instance, receiver); ok {
 		if value, was_field := table_get(&instance.fields, name); was_field {
@@ -426,27 +185,27 @@ invoke :: proc(name: ^String, argc: int) -> bool {
 	return runtime_error("Only instances have methods.")
 }
 
-invoke_from_class :: proc(class: ^Class, name: ^String, argc: int) -> bool {
+invoke_from_class :: proc "contextless" (class: ^Class, name: ^String, argc: int) -> bool {
 	if val, ok := table_get(&class.methods, name); ok {
-		method := value_as(Closure, val) or_else panic("miscompilation")
+		method := value_as(Closure, val)
 		return call_closure(method, argc)
 	}
 	return runtime_error("Undefined property %q.", name)
 }
 
-bind_method :: proc(class: ^Class, name: ^String) -> bool {
+bind_method :: proc "contextless" (class: ^Class, name: ^String) -> bool {
 	method, ok := table_get(&class.methods, name)
 	if !ok {
 		return runtime_error("Undefined property %q.", name)
 	}
-	closure := value_as(Closure, method) or_else panic("miscompilation")
+	closure := value_as(Closure, method)
 	bound := new_bound_method(peek(0), closure)
 	pop_()
 	push(bound)
 	return true
 }
 
-capture_upvalue :: proc(slot: ^Value) -> ^Upvalue {
+capture_upvalue :: proc "contextless" (slot: ^Value) -> ^Upvalue {
 	prev_uv: ^Upvalue
 	uv := vm.open_upvalues
 	for uv != nil && uv.location > slot {
@@ -466,20 +225,13 @@ capture_upvalue :: proc(slot: ^Value) -> ^Upvalue {
 	return created_uv
 }
 
-close_upvalues :: proc(last: ^Value) {
+close_upvalues :: proc "contextless" (last: ^Value) {
 	for vm.open_upvalues != nil && vm.open_upvalues.location >= last {
 		uv := vm.open_upvalues
 		uv.closed = uv.location^
 		uv.location = &uv.closed
 		vm.open_upvalues = uv.next_open
 	}
-}
-
-define_method :: proc(name: ^String) {
-	method := peek(0)
-	class := value_as(Class, peek(1)) or_else panic("miscompilation")
-	table_set(&class.methods, name, method)
-	pop_()
 }
 
 frame_chunk :: #force_inline proc "contextless" () -> ^Chunk {
@@ -492,7 +244,8 @@ reset_stack :: proc() {
 	vm.frame_count = 0
 }
 
-runtime_error :: proc(format: string, args: ..any) -> bool {
+runtime_error :: proc "contextless" (format: string, args: ..any) -> bool {
+	context = runtime.default_context()
 	instr := mem.ptr_sub(vm.frame.ip, raw_data(frame_chunk().code)) - 1
 	line := chunk_get_line(frame_chunk(), instr)
 	fmt.eprintf("[line %d]: Runtime error: ", line)
@@ -522,4 +275,289 @@ define_native :: proc(name: string, arity: int, implementation: Native_Fn) {
 	table_set(&vm.globals, name, impl)
 	pop_()
 	pop_()
+}
+
+Operation :: proc "preserve/none" (
+	sp: [^]Value,
+	ip: [^]u8,
+	consts: [^]Value,
+	locals: [^]Value,
+	upvalues: [^]^Upvalue,
+) -> bool
+
+// odinfmt: disable
+@(rodata)
+optable := [Opcode]Operation {
+	.NIL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		sp[0] = nil
+		return #must_tail exec(sp[1:], ip[1:], consts, locals, upvalues)
+	},
+	.FALSE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		sp[0] = false
+		return #must_tail exec(sp[1:], ip[1:], consts, locals, upvalues)
+	},
+	.TRUE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		sp[0] = true
+		return #must_tail exec(sp[1:], ip[1:], consts, locals, upvalues)
+	},
+	.CONST = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		sp[0] = consts[ip[1]]
+		return #must_tail exec(sp[1:], ip[2:], consts, locals, upvalues)
+	},
+	.POP = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
+	},
+	.RETURN = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		result := sp[-1]
+		close_upvalues(locals)
+		if vm.frame_count -= 1; vm.frame_count == 0 {
+			vm.stack_top = sp[-2:]
+			return true
+		}
+		vm.stack_top = locals
+		vm.stack_top[0] = result
+		vm.frame = &vm.frames[vm.frame_count - 1]
+		f := vm.frame
+		return #must_tail exec(vm.stack_top[1:], f.ip, f.consts, f.slots, f.upvalues)
+	},
+	.PRINT = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		context = vm.ctx
+		fmt.wprintln(vm.stdout, sp[-1])
+		return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
+	},
+	.GET_LOCAL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		sp[0] = locals[ip[1]]
+		return #must_tail exec(sp[1:], ip[2:], consts, locals, upvalues)
+	},
+	.SET_LOCAL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		locals[ip[1]] = sp[-1]
+		return #must_tail exec(sp[:], ip[2:], consts, locals, upvalues)
+	},
+	.DEF_GLOBAL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		name := value_as(String, consts[ip[1]])
+		vm.stack_top = sp // gc
+		table_set(&vm.globals, name, sp[-1])
+		return #must_tail exec(sp[-1:], ip[2:], consts, locals, upvalues)
+	},
+	.SET_GLOBAL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		name := value_as(String, consts[ip[1]])
+		vm.stack_top = sp // gc
+		if table_set(&vm.globals, name, sp[-1]) {
+			table_remove(&vm.globals, name)
+			return runtime_error("Undefined variable '%s'", name)
+		}
+		return #must_tail exec(sp[:], ip[2:], consts, locals, upvalues)
+	},
+	.GET_UPVALUE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		sp[0] = upvalues[ip[1]].location^
+		return #must_tail exec(sp[1:], ip[2:], consts, locals, upvalues)
+	},
+	.SET_UPVALUE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		upvalues[ip[1]].location^ = sp[-1]
+		return #must_tail exec(sp[:], ip[2:], consts, locals, upvalues)
+	},
+	.GET_PROPERTY = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		instance, is_inst := value_as(Instance, sp[-1])
+		if !is_inst {
+			return runtime_error("Only instances have properties.")
+		}
+		name := value_as(String, consts[ip[1]])
+		if value, ok := table_get(&instance.fields, name); ok {
+			sp[-1] = value
+		} else {
+			vm.stack_top = sp // gc
+			bind_method(instance.class, name) or_return
+		}
+		return #must_tail exec(sp[:], ip[2:], consts, locals, upvalues)
+	},
+	.SET_PROPERTY = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		instance, is_inst := value_as(Instance, sp[-2])
+		if !is_inst {return runtime_error("Only instances have properties.")}
+		name := value_as(String, consts[ip[1]])
+		vm.stack_top = sp // gc
+		table_set(&instance.fields, name, sp[-1])
+		sp[-2] = sp[-1]
+		return #must_tail exec(sp[-1:], ip[2:], consts, locals, upvalues)
+	},
+	.GET_SUPER = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		name := value_as(String, consts[ip[1]])
+		superclass := value_as(Class, sp[-1])
+		vm.stack_top = sp[-1:]
+		bind_method(superclass, name) or_return
+		return #must_tail exec(sp[-1:], ip[2:], consts, locals, upvalues)
+	},
+	.LOOP = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		offset := u16(ip[1] << 8) | u16(ip[2])
+		return #must_tail exec(sp[:], ip[3 - offset:], consts, locals, upvalues)
+	},
+	.CALL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		argc := int(ip[1])
+		vm.frame.ip = ip[2:]
+		vm.stack_top = sp
+		call_value(sp[-argc - 1], argc) or_return
+		f := vm.frame
+		return #must_tail exec(vm.stack_top, f.ip, f.consts, f.slots, f.upvalues)
+	},
+	.INVOKE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		method := value_as(String, consts[ip[1]])
+		argc := int(ip[2])
+		vm.stack_top = sp
+		vm.frame.ip = ip[3:]
+		invoke(method, argc) or_return
+		f := vm.frame
+		return #must_tail exec(vm.stack_top, f.ip, f.consts, f.slots, f.upvalues)
+	},
+	.SUPER_INVOKE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		method := value_as(String, consts[ip[1]])
+		argc := int(ip[2])
+		superclass := value_as(Class, sp[-1])
+		vm.stack_top = sp[-1:]
+		vm.frame.ip = ip[3:]
+		invoke_from_class(superclass, method, argc) or_return
+		f := vm.frame
+		return #must_tail exec(vm.stack_top, f.ip, f.consts, f.slots, f.upvalues)
+	},
+	.CLOSURE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		fn := value_as(Function, consts[ip[1]])
+		vm.stack_top = sp
+		cl := new_closure(fn)
+		sp[0] = cl
+		for &uv, i in cl.upvalues {
+			is_local := bool(ip[2 * i + 2])
+			index := ip[2 * i + 3]
+			if is_local {
+				uv = capture_upvalue(&locals[index])
+			} else {
+				uv = upvalues[index]
+			}
+		}
+		return #must_tail exec(sp[1:], ip[2 * len(cl.upvalues) + 2:], consts, locals, upvalues)
+	},
+	.CLOSE_UPVALUE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		close_upvalues(&sp[-1])
+		return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
+	},
+	.JUMP = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		offset := u16(ip[1] << 8) | u16(ip[2])
+		return #must_tail exec(sp[:], ip[3 + offset:], consts, locals, upvalues)
+	},
+	.JUMP_IF_NOT = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		offset := value_is_falsey(sp[-1]) ? u16(ip[1] << 8) | u16(ip[2]) : 0
+		return #must_tail exec(sp[:], ip[3 + offset:], consts, locals, upvalues)
+	},
+	.EQUAL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		sp[-2] = sp[-2] == sp[-1]
+		return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
+	},
+	.LESS = numeric_op,
+	.GREATER = numeric_op,
+	.SUB = numeric_op,
+	.MUL = numeric_op,
+	.DIV = numeric_op,
+	.ADD = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		if b, b_ok := value_as(String, sp[-1]); b_ok {
+			if a, a_ok := value_as(String, sp[-2]); a_ok {
+				context = vm.ctx
+				vm.stack_top = sp
+				text := strings.concatenate({a.data, b.data})
+				sp[-2] = take_string(text)
+				return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
+			}
+		}
+		return #must_tail numeric_op(sp[:], ip[:], consts, locals, upvalues)
+	},
+	.NOT = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		sp[-1] = value_is_falsey(sp[-1])
+		return #must_tail exec(sp[:], ip[1:], consts, locals, upvalues)
+	},
+	.NEGATE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		n, ok := sp[-1].(f64)
+		if !ok {return runtime_error("Operand must be a number.")}
+		sp[-1] = -n
+		return #must_tail exec(sp[:], ip[1:], consts, locals, upvalues)
+	},
+	.CLASS = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		name := value_as(String, consts[ip[1]])
+		vm.stack_top = sp // gc
+		sp[0] = new_class(name)
+		return #must_tail exec(sp[1:], ip[2:], consts, locals, upvalues)
+	},
+	.METHOD = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		method := sp[-1]
+		class := value_as(Class, sp[-2])
+		name := value_as(String, consts[ip[1]])
+		vm.stack_top = sp // gc
+		table_set(&class.methods, name, method)
+		return #must_tail exec(sp[-1:], ip[2:], consts, locals, upvalues)
+	},
+	.INHERIT = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		superclass, is_class := value_as(Class, sp[-2])
+		if !is_class {return runtime_error("Superclass must be a class.")}
+		subclass := value_as(Class, sp[-1])
+		vm.stack_top = sp // gc
+		table_add_all(superclass.methods, &subclass.methods)
+		return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
+	},
+	.GET_GLOBAL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+		name := value_as(String, consts[ip[1]])
+		v, ok := table_get(&vm.globals, name)
+		if !ok {return runtime_error("Undefined variable '%s'", name)}
+		sp[0] = v
+		return #must_tail exec(sp[1:], ip[2:], consts, locals, upvalues)
+	},
+}
+// odinfmt: enable
+
+exec :: proc "preserve/none" (
+	sp: [^]Value,
+	ip: [^]u8,
+	consts: [^]Value,
+	locals: [^]Value,
+	upvalues: [^]^Upvalue,
+) -> bool {
+	when DEBUG_TRACE_EXECUTION {
+		context = vm.ctx
+		for s := raw_data(&vm.stack); s < sp; s = s[1:] {
+			fmt.printf("[ %v ]", s[0])
+			if s > &vm.stack[10] {
+				fmt.print("...")
+				break
+			}
+		}
+		fmt.printf("\n%v\n", Opcode(ip[0]))
+	}
+	return #must_tail optable[Opcode(ip[0])](sp, ip, consts, locals, upvalues)
+}
+
+check_arith :: proc "contextless" (a, b: Value) -> (n, m: f64, ok: bool) {
+	if n, ok = a.(f64); ok {
+		if m, ok = b.(f64); ok {
+			return
+		}
+	}
+	ta := value_type(a)
+	tb := value_type(b)
+	return 0, 0, runtime_error("Operands must be numbers, but got: %v and %v.", ta, tb)
+}
+
+numeric_op :: proc "preserve/none" (
+	sp: [^]Value,
+	ip: [^]u8,
+	consts: [^]Value,
+	locals: [^]Value,
+	uvs: [^]^Upvalue,
+) -> bool {
+	a, b := check_arith(sp[-2], sp[-1]) or_return
+	// odinfmt: disable
+	#partial switch Opcode(ip[0]) {
+	case .ADD:     sp[-2] = a + b
+	case .SUB:     sp[-2] = a - b
+	case .MUL:     sp[-2] = a * b
+	case .DIV:     sp[-2] = a / b
+	case .LESS:    sp[-2] = a < b
+	case .GREATER: sp[-2] = a > b
+	case: return runtime_error("Not a numeric op: %v", Opcode(ip[0]))
+	}
+	// odinfmt: enable
+	return #must_tail exec(sp[-1:], ip[1:], consts, locals, uvs)
 }

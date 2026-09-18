@@ -1,5 +1,8 @@
 package olox
 
+import "base:runtime"
+_ :: runtime
+
 Entry :: struct {
 	key: ^String,
 	value: Value,
@@ -15,7 +18,7 @@ EMPTY :: (^String)(uintptr(0))
 @(private = "file")
 TOMBSTONE :: (^String)(uintptr(1))
 
-table_init :: proc(table: ^Table) {
+table_init :: proc "contextless" (table: ^Table) {
 	// nothing
 }
 
@@ -24,7 +27,7 @@ table_destroy :: proc(table: ^Table) {
 	table^ = {}
 }
 
-table_set :: proc(table: ^Table, key: ^String, value: Value) -> (is_new: bool) {
+table_set :: proc "contextless" (table: ^Table, key: ^String, value: Value) -> (is_new: bool) {
 	if table.used + 1 > len(table.entries) * 3 / 4 {
 		capacity := len(table.entries) == 0 ? 8 : len(table.entries) * 2
 		_table_grow(table, capacity)
@@ -37,14 +40,20 @@ table_set :: proc(table: ^Table, key: ^String, value: Value) -> (is_new: bool) {
 	return
 }
 
-table_get :: proc(table: ^Table, key: ^String) -> (value: Value, ok: bool) #optional_ok {
+table_get :: proc "contextless" (
+	table: ^Table,
+	key: ^String,
+) -> (
+	value: Value,
+	ok: bool,
+) #optional_ok {
 	if len(table.entries) == 0 {return}
 	entry := _find_slot(table.entries, key)
 	if entry.key <= TOMBSTONE {return}
 	return entry.value, true
 }
 
-table_remove :: proc(table: ^Table, key: ^String) -> (existed: bool) {
+table_remove :: proc "contextless" (table: ^Table, key: ^String) -> (existed: bool) {
 	if len(table.entries) == 0 {return}
 	entry := _find_slot(table.entries, key)
 	if entry.key <= TOMBSTONE {return}
@@ -52,7 +61,7 @@ table_remove :: proc(table: ^Table, key: ^String) -> (existed: bool) {
 	return true
 }
 
-table_add_all :: proc(source: Table, dest: ^Table) {
+table_add_all :: proc "contextless" (source: Table, dest: ^Table) {
 	for e in source.entries {
 		if e.key > TOMBSTONE {
 			table_set(dest, e.key, e.value)
@@ -60,7 +69,7 @@ table_add_all :: proc(source: Table, dest: ^Table) {
 	}
 }
 
-table_find_string :: proc(
+table_find_string :: proc "contextless" (
 	table: ^Table,
 	str: string,
 	hash: u32,
@@ -80,7 +89,7 @@ table_find_string :: proc(
 	}
 }
 
-table_remove_white :: proc(table: ^Table) {
+table_remove_white :: proc "contextless" (table: ^Table) {
 	for e in table.entries {
 		if e.key > TOMBSTONE && !e.key.is_marked {
 			table_remove(table, e.key)
@@ -95,7 +104,7 @@ mark_table :: proc(t: ^Table) {
 	}
 }
 
-_find_slot :: proc(entries: []Entry, key: ^String) -> ^Entry {
+_find_slot :: proc "contextless" (entries: []Entry, key: ^String) -> ^Entry {
 	mask := len(entries) - 1
 	tombstone: Maybe(^Entry)
 	#no_bounds_check for i := int(key.hash) & mask;; i = (i + 1) & mask {
@@ -117,8 +126,9 @@ _find_slot :: proc(entries: []Entry, key: ^String) -> ^Entry {
 	}
 }
 
-_table_grow :: proc(table: ^Table, new_capacity: int) {
-	new_entries := make([]Entry, new_capacity, lox_allocator())
+_table_grow :: proc "contextless" (table: ^Table, new_capacity: int) {
+	context = vm.ctx
+	new_entries := make([]Entry, new_capacity)
 
 	table.used = 0
 	for e in table.entries {
@@ -128,6 +138,6 @@ _table_grow :: proc(table: ^Table, new_capacity: int) {
 		}
 	}
 
-	delete(table.entries, lox_allocator())
+	delete(table.entries)
 	table.entries = new_entries
 }

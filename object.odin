@@ -4,7 +4,10 @@ package olox
 import "core:fmt"
 import "core:hash"
 import "core:mem"
+import "core:reflect"
 import "core:strings"
+
+_ :: reflect
 
 Object :: struct {
 	next_obj: ^Object,
@@ -37,7 +40,7 @@ Function :: struct {
 	chunk: Chunk,
 }
 
-Native_Fn :: proc(args: []Value) -> (result: Value, ok: bool)
+Native_Fn :: proc "contextless" (args: []Value) -> (result: Value, ok: bool)
 
 Native :: struct {
 	using obj: Object,
@@ -76,8 +79,9 @@ Bound_Method :: struct {
 	method: ^Closure,
 }
 
-obj_create :: proc($T: typeid) -> ^T {
-	o := new(T, lox_allocator())
+obj_create :: proc "contextless" ($T: typeid) -> ^T {
+	context = vm.ctx
+	o := new(T)
 	o.variant = o
 	o.next_obj = vm.objects
 	vm.objects = &o.obj
@@ -119,7 +123,7 @@ obj_destroy :: proc(o: ^Object) {
 	}
 }
 
-allocate_string :: proc(text: string, hash: u32) -> ^String {
+allocate_string :: proc "contextless" (text: string, hash: u32) -> ^String {
 	s := obj_create(String)
 	s.data = text
 	s.hash = hash
@@ -138,58 +142,60 @@ take_string :: proc(text: string) -> ^String {
 	return allocate_string(text, h)
 }
 
-intern_string :: proc(text: string) -> ^String {
+intern_string :: proc "contextless" (text: string) -> ^String {
 	h := hash.fnv32(transmute([]u8)text)
 	interned := table_find_string(&vm.strings, text, h)
 	if interned != nil {
 		return interned
 	}
-	cloned := strings.clone(text, lox_allocator())
+	context = vm.ctx
+	cloned := strings.clone(text)
 	return allocate_string(cloned, h)
 }
 
-new_function :: proc() -> ^Function {
+new_function :: proc "contextless" () -> ^Function {
 	f := obj_create(Function)
 	chunk_init(&f.chunk)
 	return f
 }
 
-new_closure :: proc(fn: ^Function) -> ^Closure {
-	upvalues := make([]^Upvalue, fn.upvalue_count, lox_allocator())
+new_closure :: proc "contextless" (fn: ^Function) -> ^Closure {
+	context = vm.ctx
+	upvalues := make([]^Upvalue, fn.upvalue_count)
 	o := obj_create(Closure)
 	o.function = fn
 	o.upvalues = upvalues
 	return o
 }
 
-new_bound_method :: proc(receiver: Value, method: ^Closure) -> ^Bound_Method {
+new_bound_method :: proc "contextless" (receiver: Value, method: ^Closure) -> ^Bound_Method {
 	o := obj_create(Bound_Method)
 	o.receiver = receiver
 	o.method = method
 	return o
 }
 
-new_class :: proc(name: ^String) -> ^Class {
+new_class :: proc "contextless" (name: ^String) -> ^Class {
 	o := obj_create(Class)
 	o.name = name
 	table_init(&o.methods)
 	return o
 }
 
-new_instance :: proc(class: ^Class) -> ^Instance {
+new_instance :: proc "contextless" (class: ^Class) -> ^Instance {
 	o := obj_create(Instance)
 	o.class = class
 	table_init(&o.fields)
 	return o
 }
 
-new_upvalue :: proc(slot: ^Value) -> ^Upvalue {
+new_upvalue :: proc "contextless" (slot: ^Value) -> ^Upvalue {
 	o := obj_create(Upvalue)
 	o.location = slot
 	return o
 }
 
-new_native :: proc(arity: int, f: Native_Fn) -> ^Native {
+new_native :: proc "contextless" (arity: int, f: Native_Fn) -> ^Native {
 	o := obj_create(Native)
 	o.arity = arity
 	o.call = f
@@ -279,6 +285,7 @@ set_formatters :: proc() {
 	fmt.register_user_formatter(^Bound_Method, beound_method_formatter)
 	fmt.register_user_formatter(^Upvalue, upvalue_formatter)
 	fmt.register_user_formatter(^Class, class_formatter)
+	fmt.register_user_formatter(^Instance, instance_formatter)
 }
 
 @(fini)

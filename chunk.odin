@@ -12,7 +12,7 @@ Line :: struct {
 	count: u32,
 }
 
-chunk_init :: proc(ch: ^Chunk) -> ^Chunk {
+chunk_init :: proc "contextless" (ch: ^Chunk) -> ^Chunk {
 	allocator := lox_allocator()
 	ch.code.allocator = allocator
 	ch.consts.allocator = allocator

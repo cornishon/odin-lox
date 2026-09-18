@@ -24,7 +24,7 @@ value_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 	return true
 }
 
-value_type :: proc(value: Value) -> string {
+value_type :: proc "contextless" (value: Value) -> string {
 	switch v in value {
 	case f64:
 		return "number"
@@ -53,7 +53,7 @@ value_type :: proc(value: Value) -> string {
 	return "nil"
 }
 
-value_as :: proc($T: typeid, value: Value) -> (^T, bool) {
+value_as :: proc "contextless" ($T: typeid, value: Value) -> (^T, bool) #optional_ok {
 	#partial switch v in value {
 	case ^Object:
 		return v.variant.(^T)
@@ -61,7 +61,7 @@ value_as :: proc($T: typeid, value: Value) -> (^T, bool) {
 	return nil, false
 }
 
-value_is_falsey :: proc(value: Value) -> bool {
+value_is_falsey :: proc "contextless" (value: Value) -> bool {
 	#partial switch v in value {
 	case bool:
 		return !v

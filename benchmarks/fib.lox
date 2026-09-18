@@ -3,6 +3,6 @@ fun fib(n) {
 	return fib(n - 2) + fib(n - 1);
 }
 
-var start = clock();
-print fib(10);
+//var start = clock();
+print fib(36);
 //print clock() - start;
