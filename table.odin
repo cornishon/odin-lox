@@ -83,7 +83,7 @@ table_find_string :: proc "contextless" (
 	#no_bounds_check for i := int(hash) & mask;; i = (i + 1) & mask {
 		ek := table.entries[i].key
 		if ek == EMPTY {return} 	// stop if we find an empty non-tombstone entry
-		if ek > TOMBSTONE && ek.hash == hash && ek.data == str {
+		if ek > TOMBSTONE && ek.hash == hash && ek.text == str {
 			return ek, true
 		}
 	}

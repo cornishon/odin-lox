@@ -36,7 +36,7 @@ vm: struct {
 	frame_count: int,
 }
 
-Call_Frame :: struct {
+Call_Frame :: struct #all_or_none {
 	closure: ^Closure,
 	ip: [^]u8,
 	slots: [^]Value,
@@ -101,8 +101,7 @@ vm_interpret :: proc(source: string) -> bool {
 	pop_()
 	push(c)
 	call_closure(c, 0)
-	f := &vm.frames[vm.frame_count - 1]
-	return exec(vm.stack_top, f.ip, f.consts, f.slots, f.upvalues)
+	return exec(enter_frame(vm.stack_top, &vm.frames[vm.frame_count - 1]))
 }
 
 push :: #force_inline proc "contextless" (value: Value) {
@@ -117,6 +116,19 @@ pop_ :: #force_inline proc "contextless" () -> Value {
 
 peek :: #force_inline proc "contextless" (distance: int) -> Value {
 	return vm.stack_top[-distance - 1]
+}
+
+enter_frame :: proc "contextless" (
+	sp: [^]Value,
+	fp: ^Call_Frame,
+) -> (
+	sp_: [^]Value,
+	ip_: [^]u8,
+	consts: [^]Value,
+	locals: [^]Value,
+	upvalues: [^]^Upvalue,
+) {
+	return sp, fp.ip, fp.consts, fp.slots, fp.upvalues
 }
 
 call_closure :: proc "contextless" (c: ^Closure, argc: int) -> bool {
@@ -311,14 +323,13 @@ optable := [Opcode]Operation {
 		result := sp[-1]
 		close_upvalues(locals)
 		if vm.frame_count -= 1; vm.frame_count == 0 {
-			vm.stack_top = sp[-2:]
+			vm.stack_top = &vm.stack[0]
 			return true
 		}
 		vm.stack_top = locals
 		vm.stack_top[0] = result
 		vm.frame = &vm.frames[vm.frame_count - 1]
-		f := vm.frame
-		return #must_tail exec(vm.stack_top[1:], f.ip, f.consts, f.slots, f.upvalues)
+		return #must_tail exec(enter_frame(vm.stack_top[1:], vm.frame))
 	},
 	.PRINT = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
 		context = vm.ctx
@@ -393,29 +404,26 @@ optable := [Opcode]Operation {
 	.CALL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
 		argc := int(ip[1])
 		vm.frame.ip = ip[2:]
-		vm.stack_top = sp
+		vm.stack_top = sp // gc
 		call_value(sp[-argc - 1], argc) or_return
-		f := vm.frame
-		return #must_tail exec(vm.stack_top, f.ip, f.consts, f.slots, f.upvalues)
+		return #must_tail exec(enter_frame(vm.stack_top, vm.frame))
 	},
 	.INVOKE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
 		method := value_as(String, consts[ip[1]])
 		argc := int(ip[2])
-		vm.stack_top = sp
+		vm.stack_top = sp // gc
 		vm.frame.ip = ip[3:]
 		invoke(method, argc) or_return
-		f := vm.frame
-		return #must_tail exec(vm.stack_top, f.ip, f.consts, f.slots, f.upvalues)
+		return #must_tail exec(enter_frame(vm.stack_top, vm.frame))
 	},
 	.SUPER_INVOKE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
 		method := value_as(String, consts[ip[1]])
 		argc := int(ip[2])
 		superclass := value_as(Class, sp[-1])
-		vm.stack_top = sp[-1:]
+		vm.stack_top = sp[-1:] // gc
 		vm.frame.ip = ip[3:]
 		invoke_from_class(superclass, method, argc) or_return
-		f := vm.frame
-		return #must_tail exec(vm.stack_top, f.ip, f.consts, f.slots, f.upvalues)
+		return #must_tail exec(enter_frame(vm.stack_top, vm.frame))
 	},
 	.CLOSURE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
 		fn := value_as(Function, consts[ip[1]])
@@ -459,7 +467,7 @@ optable := [Opcode]Operation {
 			if a, a_ok := value_as(String, sp[-2]); a_ok {
 				context = vm.ctx
 				vm.stack_top = sp
-				text := strings.concatenate({a.data, b.data})
+				text := strings.concatenate({a.text, b.text})
 				sp[-2] = take_string(text)
 				return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
 			}

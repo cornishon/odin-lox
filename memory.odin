@@ -81,7 +81,9 @@ sweep :: proc() {
 }
 
 blacken_object :: proc(obj: ^Object) {
-	when DEBUG_LOG_GC {fmt.printfln("%p blacken %v", obj, obj)}
+	when DEBUG_LOG_GC {
+		fmt.printfln("%p blacken %v", rawptr(obj), reflect.union_variant_typeid(obj.variant))
+	}
 	switch v in obj.variant {
 	case ^Function:
 		mark_object(v.name)
@@ -117,7 +119,9 @@ mark_value :: proc(value: Value) {
 mark_object :: proc(o: ^Object) {
 	if o == nil {return}
 	if o.is_marked {return}
-	when DEBUG_LOG_GC {fmt.printfln("%p mark %v", o, o)}
+	when DEBUG_LOG_GC {
+		fmt.printfln("%p mark %v", rawptr(o), reflect.union_variant_typeid(o.variant))
+	}
 	o.is_marked = true
 	switch v in o.variant {
 	case ^Function, ^Closure, ^Upvalue, ^Class, ^Instance, ^Bound_Method:

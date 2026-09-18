@@ -1,27 +1,9 @@
 package olox
 
-import "core:fmt"
-
 Value :: union {
 	^Object,
 	f64,
 	bool,
-}
-
-value_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
-	value := arg.(Value) or_return
-	switch v in value {
-	case f64:
-		fmt.fmt_value(fi, v, verb == 'q' ? 'v' : verb)
-	case bool:
-		fmt.fmt_value(fi, v, verb == 'q' ? 'v' : verb)
-	case ^Object:
-		fmt.fmt_value(fi, v.variant, verb)
-	case:
-		fi.ignore_user_formatters = true
-		fmt.fmt_value(fi, arg, verb == 'q' ? 'v' : verb)
-	}
-	return true
 }
 
 value_type :: proc "contextless" (value: Value) -> string {
@@ -45,7 +27,7 @@ value_type :: proc "contextless" (value: Value) -> string {
 		case ^Class:
 			return "class" // maybe should be the class name?
 		case ^Instance:
-			return v.class.name.data
+			return v.class.name.text
 		case ^Bound_Method:
 			return "method"
 		}

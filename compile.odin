@@ -220,7 +220,7 @@ compiler_end :: proc() -> ^Function {
 	table_destroy(&current_compiler.identifiers)
 	current_compiler = current_compiler.enclosing
 	when DEBUG_PRINT_CODE {
-		name := function.name.data if function.name != nil else "<script>"
+		name := function.name.text if function.name != nil else "<script>"
 		disassemble(&function.chunk, name)
 	}
 	return function

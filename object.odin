@@ -1,6 +1,7 @@
 #+feature global-context
 package olox
 
+import "base:runtime"
 import "core:fmt"
 import "core:hash"
 import "core:mem"
@@ -8,6 +9,7 @@ import "core:reflect"
 import "core:strings"
 
 _ :: reflect
+_ :: runtime
 
 Object :: struct {
 	next_obj: ^Object,
@@ -28,7 +30,7 @@ Object_Variant :: union {
 
 String :: struct {
 	using obj: Object,
-	data: string,
+	text: string,
 	hash: u32,
 }
 
@@ -86,19 +88,19 @@ obj_create :: proc "contextless" ($T: typeid) -> ^T {
 	o.next_obj = vm.objects
 	vm.objects = &o.obj
 	when DEBUG_LOG_GC {
-		fmt.printfln("%p allocate %d for %v", o, size_of(T), typeid_of(T))
+		fmt.printfln("%p allocate %d for %v", rawptr(o), size_of(T), typeid_of(T))
 	}
 	return o
 }
 
 obj_destroy :: proc(o: ^Object) {
 	when DEBUG_LOG_GC {
-		fmt.printfln("%p free type %v", o, reflect.union_variant_typeid(o.variant))
+		fmt.printfln("%p free type %v", rawptr(o), reflect.union_variant_typeid(o.variant))
 	}
 	context.allocator = lox_allocator()
 	switch v in o.variant {
 	case ^String:
-		delete(v.data)
+		delete(v.text)
 		// regular free() does not pass allocation size to the allocator procedure,
 		// which we rely on for tracking the total bytes allocated
 		delete(mem.ptr_to_bytes(v))
@@ -125,7 +127,7 @@ obj_destroy :: proc(o: ^Object) {
 
 allocate_string :: proc "contextless" (text: string, hash: u32) -> ^String {
 	s := obj_create(String)
-	s.data = text
+	s.text = text
 	s.hash = hash
 	push(s); pop_()
 	table_set(&vm.strings, s, nil)
@@ -203,70 +205,31 @@ new_native :: proc "contextless" (arity: int, f: Native_Fn) -> ^Native {
 }
 
 obj_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+	context.allocator = vm.backing_allocator
 	o := arg.(^Object) or_return
-	fmt.fmt_value(fi, o.variant, verb)
-	return true
-}
-
-string_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
-	v := arg.(^String) or_return
-	return variant_formatter(fi, v, verb, v.data)
-}
-
-function_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
-	v := arg.(^Function) or_return
-	if v.name == nil {
-		return variant_formatter(fi, v, verb, "<script>")
-	} else {
-		return variant_formatter(fi, v, verb, "<fun %s>", v.name.data)
+	if o == nil {
+		fmt.wprint(fi.writer, "nil")
+		return true
 	}
-}
-
-closure_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
-	v := arg.(^Closure) or_return
-	fmt.fmt_value(fi, v.function, verb)
-	return true
-}
-
-beound_method_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
-	v := arg.(^Bound_Method) or_return
-	fmt.fmt_value(fi, v.method.function, verb)
-	return true
-}
-
-upvalue_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
-	v := arg.(^Upvalue) or_return
-	return variant_formatter(fi, v, verb, "upvalue")
-}
-
-native_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
-	v := arg.(^Native) or_return
-	return variant_formatter(fi, v, verb, "<native function>")
-}
-
-class_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
-	v := arg.(^Class) or_return
-	return variant_formatter(fi, v, verb, "class %s", v.name.data)
-}
-
-instance_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
-	v := arg.(^Instance) or_return
-	return variant_formatter(fi, v, verb, "%s instance", v.class.name.data)
-}
-
-variant_formatter :: proc(
-	fi: ^fmt.Info,
-	v: Object_Variant,
-	verb: rune,
-	format: string,
-	args: ..any,
-) -> bool {
-	switch verb {
-	case 'v', 's', 'q':
-		fi.n += fmt.wprintf(fi.writer, format, ..args)
+	switch v in o.variant {
+	case ^String:
+		fmt.fmt_string(fi, v.text, verb)
+	case ^Function:
+		fi.n += fmt.wprintf(fi.writer, "<fun %s>", v.name.text)
+	case ^Native:
+		fmt.fmt_string(fi, "<native>", verb)
+	case ^Closure:
+		fi.n += fmt.wprintf(fi.writer, "<fun %s>", v.function.name.text)
+	case ^Upvalue:
+		fmt.fmt_string(fi, "upvalue", verb)
+	case ^Class:
+		fi.n += fmt.wprintf(fi.writer, "class %s", v.name.text)
+	case ^Instance:
+		fi.n += fmt.wprintf(fi.writer, "%s instance", v.class.name.text)
+	case ^Bound_Method:
+		fi.n += fmt.wprintf(fi.writer, "<fun %s>", v.method.function.name.text)
 	case:
-		fi.ignore_user_formatters = true
-		fmt.fmt_value(fi, v, verb)
+		fi.n += fmt.wprintf(fi.writer, "CORRUPTED OBJECT at %p", rawptr(o))
 	}
 	return true
 }
@@ -276,16 +239,7 @@ formatters: map[typeid]fmt.User_Formatter
 @(init)
 set_formatters :: proc() {
 	fmt.set_user_formatters(&formatters)
-	fmt.register_user_formatter(Value, value_formatter)
 	fmt.register_user_formatter(^Object, obj_formatter)
-	fmt.register_user_formatter(^String, string_formatter)
-	fmt.register_user_formatter(^Function, function_formatter)
-	fmt.register_user_formatter(^Native, native_formatter)
-	fmt.register_user_formatter(^Closure, closure_formatter)
-	fmt.register_user_formatter(^Bound_Method, beound_method_formatter)
-	fmt.register_user_formatter(^Upvalue, upvalue_formatter)
-	fmt.register_user_formatter(^Class, class_formatter)
-	fmt.register_user_formatter(^Instance, instance_formatter)
 }
 
 @(fini)
