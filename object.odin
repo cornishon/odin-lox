@@ -6,7 +6,6 @@ import "core:fmt"
 import "core:hash"
 import "core:mem"
 import "core:reflect"
-import "core:strings"
 
 _ :: reflect
 _ :: runtime
@@ -30,8 +29,13 @@ Object_Variant :: union {
 
 String :: struct {
 	using obj: Object,
-	text: string,
 	hash: u32,
+	len: int,
+	data: [0]u8,
+}
+
+string_text :: #force_inline proc "contextless" (s: ^String) -> string {
+	#no_bounds_check return string(s.data[:s.len])
 }
 
 Function :: struct {
@@ -81,9 +85,11 @@ Bound_Method :: struct {
 	method: ^Closure,
 }
 
-obj_create :: proc "contextless" ($T: typeid) -> ^T {
+obj_create :: proc "contextless" ($T: typeid, extra := 0) -> ^T {
 	context = vm.ctx
-	o := new(T)
+	ptr, err := mem.alloc(size_of(T) + extra, alignment = align_of(T))
+	if err != nil {return nil}
+	o := cast(^T)ptr
 	o.variant = o
 	o.next_obj = vm.objects
 	vm.objects = &o.obj
@@ -100,12 +106,11 @@ obj_destroy :: proc(o: ^Object) {
 	context.allocator = lox_allocator()
 	switch v in o.variant {
 	case ^String:
-		delete(v.text)
-		// regular free() does not pass allocation size to the allocator procedure,
-		// which we rely on for tracking the total bytes allocated
-		delete(mem.ptr_to_bytes(v))
+		delete(mem.ptr_to_bytes(cast(^u8)v, size_of(String) + v.len))
 	case ^Function:
 		chunk_deinit(&v.chunk)
+		// regular free() does not pass allocation size to the allocator procedure,
+		// which we rely on for tracking the total bytes allocated
 		delete(mem.ptr_to_bytes(v))
 	case ^Closure:
 		delete(v.upvalues)
@@ -125,34 +130,27 @@ obj_destroy :: proc(o: ^Object) {
 	}
 }
 
-allocate_string :: proc "contextless" (text: string, hash: u32) -> ^String {
-	s := obj_create(String)
-	s.text = text
+intern_string :: proc "contextless" (text: string, tail: string = "") -> ^String {
+	h := hash.fnv32a(transmute([]u8)text)
+	h = hash.fnv32a(transmute([]u8)tail, h)
+	interned := table_find_string(&vm.strings, h, text, tail)
+	if interned != nil {
+		return interned
+	}
+	return _allocate_string(h, text, tail)
+}
+
+_allocate_string :: proc "contextless" (hash: u32, text: string, tail: string = "") -> ^String {
+	n := len(text) + len(tail)
+	s := obj_create(String, n)
+	dest := cast([^]u8)&s.data
+	copy(dest[0:len(text)], text)
+	copy(dest[len(text):n], tail)
+	s.len = n
 	s.hash = hash
 	push(s); pop_()
 	table_set(&vm.strings, s, nil)
 	return s
-}
-
-take_string :: proc(text: string) -> ^String {
-	h := hash.fnv32(transmute([]u8)text)
-	interned := table_find_string(&vm.strings, text, h)
-	if interned != nil {
-		delete(text, lox_allocator())
-		return interned
-	}
-	return allocate_string(text, h)
-}
-
-intern_string :: proc "contextless" (text: string) -> ^String {
-	h := hash.fnv32(transmute([]u8)text)
-	interned := table_find_string(&vm.strings, text, h)
-	if interned != nil {
-		return interned
-	}
-	context = vm.ctx
-	cloned := strings.clone(text)
-	return allocate_string(cloned, h)
 }
 
 new_function :: proc "contextless" () -> ^Function {
@@ -213,21 +211,21 @@ obj_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 	}
 	switch v in o.variant {
 	case ^String:
-		fmt.fmt_string(fi, v.text, verb)
+		fmt.fmt_string(fi, string_text(v), verb)
 	case ^Function:
-		fi.n += fmt.wprintf(fi.writer, "<fun %s>", v.name.text)
+		fi.n += fmt.wprintf(fi.writer, "<fun %s>", string_text(v.name))
 	case ^Native:
 		fmt.fmt_string(fi, "<native>", verb)
 	case ^Closure:
-		fi.n += fmt.wprintf(fi.writer, "<fun %s>", v.function.name.text)
+		fi.n += fmt.wprintf(fi.writer, "<fun %s>", string_text(v.function.name))
 	case ^Upvalue:
 		fmt.fmt_string(fi, "upvalue", verb)
 	case ^Class:
-		fi.n += fmt.wprintf(fi.writer, "class %s", v.name.text)
+		fi.n += fmt.wprintf(fi.writer, "class %s", string_text(v.name))
 	case ^Instance:
-		fi.n += fmt.wprintf(fi.writer, "%s instance", v.class.name.text)
+		fi.n += fmt.wprintf(fi.writer, "%s instance", string_text(v.class.name))
 	case ^Bound_Method:
-		fi.n += fmt.wprintf(fi.writer, "<fun %s>", v.method.function.name.text)
+		fi.n += fmt.wprintf(fi.writer, "<fun %s>", string_text(v.method.function.name))
 	case:
 		fi.n += fmt.wprintf(fi.writer, "CORRUPTED OBJECT at %p", rawptr(o))
 	}

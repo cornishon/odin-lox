@@ -27,7 +27,7 @@ value_type :: proc "contextless" (value: Value) -> string {
 		case ^Class:
 			return "class" // maybe should be the class name?
 		case ^Instance:
-			return v.class.name.text
+			return string_text(v.class.name)
 		case ^Bound_Method:
 			return "method"
 		}

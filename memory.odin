@@ -1,6 +1,5 @@
 package olox
 
-import "base:runtime"
 import "core:fmt"
 import "core:mem"
 import "core:reflect"
@@ -136,7 +135,7 @@ _lox_allocator_proc :: proc(
 	new_size, alignment: int,
 	pointer: rawptr,
 	old_size: int,
-	location: runtime.Source_Code_Location = #caller_location,
+	location := #caller_location,
 ) -> (
 	[]byte,
 	mem.Allocator_Error,

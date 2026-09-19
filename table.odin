@@ -69,22 +69,27 @@ table_add_all :: proc "contextless" (source: Table, dest: ^Table) {
 	}
 }
 
+// check if s + t is already in the table
 table_find_string :: proc "contextless" (
 	table: ^Table,
-	str: string,
 	hash: u32,
+	s: string,
+	t: string = "",
 ) -> (
 	interned: ^String,
 	found: bool,
 ) #optional_ok {
 	if table.used == 0 {return}
 	mask := len(table.entries) - 1
+	length := len(s) + len(t)
 
 	#no_bounds_check for i := int(hash) & mask;; i = (i + 1) & mask {
 		ek := table.entries[i].key
 		if ek == EMPTY {return} 	// stop if we find an empty non-tombstone entry
-		if ek > TOMBSTONE && ek.hash == hash && ek.text == str {
-			return ek, true
+		if ek > TOMBSTONE && ek.hash == hash && ek.len == length {
+			if string_text(ek)[:len(s)] == s && string_text(ek)[len(s):][:len(t)] == t {
+				return ek, true
+			}
 		}
 	}
 }

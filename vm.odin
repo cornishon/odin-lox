@@ -5,7 +5,6 @@ import "core:fmt"
 import "core:io"
 import "core:math"
 import "core:mem"
-import "core:strings"
 import "core:time"
 
 FRAMES_MAX :: 64
@@ -70,7 +69,7 @@ vm_init :: proc(stdout: io.Writer, backing_allocator := context.allocator) {
 		if x, is_num := args[0].(f64); is_num && x >= 0 {
 			return math.sqrt(x), true
 		}
-		return 0, runtime_error("Argument must be a non-negative number, but got: %q", args[0])
+		return 0, runtime_error("Argument must be a non-negative number, but got: %v", args[0])
 	})
 
 	define_native("typeof", 1, proc "contextless" (args: []Value) -> (Value, bool) {
@@ -187,6 +186,19 @@ call_value :: proc "contextless" (callee: Value, argc: int) -> bool {
 
 invoke :: proc "contextless" (name: ^String, argc: int) -> bool {
 	receiver := peek(argc)
+
+	if str, is_str := value_as(String, receiver); is_str {
+		switch string_text(name) {
+		case "length":
+			if argc != 0 {
+				return runtime_error("Expected 0 arguments but got %d.", argc)
+			}
+			vm.stack_top[-1] = f64(str.len)
+			return true
+		}
+		return runtime_error("Undefined property %q.", string_text(name))
+	}
+
 	if instance, ok := value_as(Instance, receiver); ok {
 		if value, was_field := table_get(&instance.fields, name); was_field {
 			vm.stack_top[-argc - 1] = value
@@ -194,6 +206,7 @@ invoke :: proc "contextless" (name: ^String, argc: int) -> bool {
 		}
 		return invoke_from_class(instance.class, name, argc)
 	}
+
 	return runtime_error("Only instances have methods.")
 }
 
@@ -202,13 +215,13 @@ invoke_from_class :: proc "contextless" (class: ^Class, name: ^String, argc: int
 		method := value_as(Closure, val)
 		return call_closure(method, argc)
 	}
-	return runtime_error("Undefined property %q.", name)
+	return runtime_error("Undefined property %q.", string_text(name))
 }
 
 bind_method :: proc "contextless" (class: ^Class, name: ^String) -> bool {
 	method, ok := table_get(&class.methods, name)
 	if !ok {
-		return runtime_error("Undefined property %q.", name)
+		return runtime_error("Undefined property %q.", string_text(name))
 	}
 	closure := value_as(Closure, method)
 	bound := new_bound_method(peek(0), closure)
@@ -622,8 +635,7 @@ optable := [Opcode]Operation {
 			if a, a_ok := value_as(String, sp[-2]); a_ok {
 				context = vm.ctx
 				vm.stack_top = sp // gc
-				text := strings.concatenate({a.text, b.text})
-				sp[-2] = take_string(text)
+				sp[-2] = intern_string(string_text(a), string_text(b))
 				return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
 			}
 		}
