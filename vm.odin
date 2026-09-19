@@ -297,32 +297,67 @@ Operation :: proc "preserve/none" (
 	upvalues: [^]^Upvalue,
 ) -> bool
 
-// odinfmt: disable
 @(rodata)
 optable := [Opcode]Operation {
-	.NIL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.NIL = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		sp[0] = nil
 		return #must_tail exec(sp[1:], ip[1:], consts, locals, upvalues)
 	},
-	.FALSE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.FALSE = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		sp[0] = false
 		return #must_tail exec(sp[1:], ip[1:], consts, locals, upvalues)
 	},
-	.TRUE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.TRUE = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		sp[0] = true
 		return #must_tail exec(sp[1:], ip[1:], consts, locals, upvalues)
 	},
-	.CONST = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.CONST = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		sp[0] = consts[ip[1]]
 		return #must_tail exec(sp[1:], ip[2:], consts, locals, upvalues)
 	},
-	.POP = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.POP = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
 	},
-	.RETURN = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.RETURN = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		result := sp[-1]
 		close_upvalues(locals)
-		if vm.frame_count -= 1; vm.frame_count == 0 {
+		vm.frame_count -= 1; if vm.frame_count == 0 {
 			vm.stack_top = &vm.stack[0]
 			return true
 		}
@@ -331,26 +366,56 @@ optable := [Opcode]Operation {
 		vm.frame = &vm.frames[vm.frame_count - 1]
 		return #must_tail exec(enter_frame(vm.stack_top[1:], vm.frame))
 	},
-	.PRINT = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.PRINT = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		context = vm.ctx
 		fmt.wprintln(vm.stdout, sp[-1])
 		return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
 	},
-	.GET_LOCAL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.GET_LOCAL = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		sp[0] = locals[ip[1]]
 		return #must_tail exec(sp[1:], ip[2:], consts, locals, upvalues)
 	},
-	.SET_LOCAL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.SET_LOCAL = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		locals[ip[1]] = sp[-1]
 		return #must_tail exec(sp[:], ip[2:], consts, locals, upvalues)
 	},
-	.DEF_GLOBAL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.DEF_GLOBAL = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		name := value_as(String, consts[ip[1]])
 		vm.stack_top = sp // gc
 		table_set(&vm.globals, name, sp[-1])
 		return #must_tail exec(sp[-1:], ip[2:], consts, locals, upvalues)
 	},
-	.SET_GLOBAL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.SET_GLOBAL = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		name := value_as(String, consts[ip[1]])
 		vm.stack_top = sp // gc
 		if table_set(&vm.globals, name, sp[-1]) {
@@ -359,15 +424,33 @@ optable := [Opcode]Operation {
 		}
 		return #must_tail exec(sp[:], ip[2:], consts, locals, upvalues)
 	},
-	.GET_UPVALUE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.GET_UPVALUE = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		sp[0] = upvalues[ip[1]].location^
 		return #must_tail exec(sp[1:], ip[2:], consts, locals, upvalues)
 	},
-	.SET_UPVALUE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.SET_UPVALUE = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		upvalues[ip[1]].location^ = sp[-1]
 		return #must_tail exec(sp[:], ip[2:], consts, locals, upvalues)
 	},
-	.GET_PROPERTY = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.GET_PROPERTY = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		instance, is_inst := value_as(Instance, sp[-1])
 		if !is_inst {
 			return runtime_error("Only instances have properties.")
@@ -381,7 +464,13 @@ optable := [Opcode]Operation {
 		}
 		return #must_tail exec(sp[:], ip[2:], consts, locals, upvalues)
 	},
-	.SET_PROPERTY = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.SET_PROPERTY = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		instance, is_inst := value_as(Instance, sp[-2])
 		if !is_inst {return runtime_error("Only instances have properties.")}
 		name := value_as(String, consts[ip[1]])
@@ -390,25 +479,49 @@ optable := [Opcode]Operation {
 		sp[-2] = sp[-1]
 		return #must_tail exec(sp[-1:], ip[2:], consts, locals, upvalues)
 	},
-	.GET_SUPER = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.GET_SUPER = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		name := value_as(String, consts[ip[1]])
 		superclass := value_as(Class, sp[-1])
 		vm.stack_top = sp[-1:]
 		bind_method(superclass, name) or_return
 		return #must_tail exec(sp[-1:], ip[2:], consts, locals, upvalues)
 	},
-	.LOOP = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.LOOP = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		offset := u16(ip[1] << 8) | u16(ip[2])
 		return #must_tail exec(sp[:], ip[3 - offset:], consts, locals, upvalues)
 	},
-	.CALL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.CALL = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		argc := int(ip[1])
 		vm.frame.ip = ip[2:]
 		vm.stack_top = sp // gc
 		call_value(sp[-argc - 1], argc) or_return
 		return #must_tail exec(enter_frame(vm.stack_top, vm.frame))
 	},
-	.INVOKE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.INVOKE = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		method := value_as(String, consts[ip[1]])
 		argc := int(ip[2])
 		vm.stack_top = sp // gc
@@ -416,7 +529,13 @@ optable := [Opcode]Operation {
 		invoke(method, argc) or_return
 		return #must_tail exec(enter_frame(vm.stack_top, vm.frame))
 	},
-	.SUPER_INVOKE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.SUPER_INVOKE = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		method := value_as(String, consts[ip[1]])
 		argc := int(ip[2])
 		superclass := value_as(Class, sp[-1])
@@ -425,7 +544,13 @@ optable := [Opcode]Operation {
 		invoke_from_class(superclass, method, argc) or_return
 		return #must_tail exec(enter_frame(vm.stack_top, vm.frame))
 	},
-	.CLOSURE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.CLOSURE = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		fn := value_as(Function, consts[ip[1]])
 		vm.stack_top = sp
 		cl := new_closure(fn)
@@ -441,19 +566,43 @@ optable := [Opcode]Operation {
 		}
 		return #must_tail exec(sp[1:], ip[2 * len(cl.upvalues) + 2:], consts, locals, upvalues)
 	},
-	.CLOSE_UPVALUE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.CLOSE_UPVALUE = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		close_upvalues(&sp[-1])
 		return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
 	},
-	.JUMP = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.JUMP = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		offset := u16(ip[1] << 8) | u16(ip[2])
 		return #must_tail exec(sp[:], ip[3 + offset:], consts, locals, upvalues)
 	},
-	.JUMP_IF_NOT = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.JUMP_IF_NOT = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		offset := value_is_falsey(sp[-1]) ? u16(ip[1] << 8) | u16(ip[2]) : 0
 		return #must_tail exec(sp[:], ip[3 + offset:], consts, locals, upvalues)
 	},
-	.EQUAL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.EQUAL = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		sp[-2] = sp[-2] == sp[-1]
 		return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
 	},
@@ -462,11 +611,17 @@ optable := [Opcode]Operation {
 	.SUB = numeric_op,
 	.MUL = numeric_op,
 	.DIV = numeric_op,
-	.ADD = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.ADD = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		if b, b_ok := value_as(String, sp[-1]); b_ok {
 			if a, a_ok := value_as(String, sp[-2]); a_ok {
 				context = vm.ctx
-				vm.stack_top = sp
+				vm.stack_top = sp // gc
 				text := strings.concatenate({a.text, b.text})
 				sp[-2] = take_string(text)
 				return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
@@ -474,23 +629,47 @@ optable := [Opcode]Operation {
 		}
 		return #must_tail numeric_op(sp[:], ip[:], consts, locals, upvalues)
 	},
-	.NOT = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.NOT = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		sp[-1] = value_is_falsey(sp[-1])
 		return #must_tail exec(sp[:], ip[1:], consts, locals, upvalues)
 	},
-	.NEGATE = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.NEGATE = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		n, ok := sp[-1].(f64)
 		if !ok {return runtime_error("Operand must be a number.")}
 		sp[-1] = -n
 		return #must_tail exec(sp[:], ip[1:], consts, locals, upvalues)
 	},
-	.CLASS = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.CLASS = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		name := value_as(String, consts[ip[1]])
 		vm.stack_top = sp // gc
 		sp[0] = new_class(name)
 		return #must_tail exec(sp[1:], ip[2:], consts, locals, upvalues)
 	},
-	.METHOD = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.METHOD = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		method := sp[-1]
 		class := value_as(Class, sp[-2])
 		name := value_as(String, consts[ip[1]])
@@ -498,7 +677,13 @@ optable := [Opcode]Operation {
 		table_set(&class.methods, name, method)
 		return #must_tail exec(sp[-1:], ip[2:], consts, locals, upvalues)
 	},
-	.INHERIT = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.INHERIT = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		superclass, is_class := value_as(Class, sp[-2])
 		if !is_class {return runtime_error("Superclass must be a class.")}
 		subclass := value_as(Class, sp[-1])
@@ -506,7 +691,13 @@ optable := [Opcode]Operation {
 		table_add_all(superclass.methods, &subclass.methods)
 		return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
 	},
-	.GET_GLOBAL = proc "preserve/none" (sp: [^]Value, ip: [^]u8, consts: [^]Value, locals: [^]Value, upvalues: [^]^Upvalue) -> bool {
+	.GET_GLOBAL = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
 		name := value_as(String, consts[ip[1]])
 		v, ok := table_get(&vm.globals, name)
 		if !ok {return runtime_error("Undefined variable '%s'", name)}
@@ -526,7 +717,7 @@ exec :: proc "preserve/none" (
 	when DEBUG_TRACE_EXECUTION {
 		context = vm.ctx
 		for s := raw_data(&vm.stack); s < sp; s = s[1:] {
-			fmt.printf("[ %v ]", s[0])
+			fmt.printf("[%v]", s[0])
 			if s > &vm.stack[10] {
 				fmt.print("...")
 				break
@@ -537,7 +728,7 @@ exec :: proc "preserve/none" (
 	return #must_tail optable[Opcode(ip[0])](sp, ip, consts, locals, upvalues)
 }
 
-check_arith :: proc "contextless" (a, b: Value) -> (n, m: f64, ok: bool) {
+unwrap_numbers :: #force_inline proc "contextless" (a, b: Value) -> (n, m: f64, ok: bool) {
 	if n, ok = a.(f64); ok {
 		if m, ok = b.(f64); ok {
 			return
@@ -555,7 +746,7 @@ numeric_op :: proc "preserve/none" (
 	locals: [^]Value,
 	uvs: [^]^Upvalue,
 ) -> bool {
-	a, b := check_arith(sp[-2], sp[-1]) or_return
+	a, b := unwrap_numbers(sp[-2], sp[-1]) or_return
 	// odinfmt: disable
 	#partial switch Opcode(ip[0]) {
 	case .ADD:     sp[-2] = a + b
