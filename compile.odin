@@ -220,7 +220,7 @@ compiler_end :: proc() -> ^Function {
 	table_destroy(&current_compiler.identifiers)
 	current_compiler = current_compiler.enclosing
 	when DEBUG_PRINT_CODE {
-		name := function.name.text if function.name != nil else "<script>"
+		name := string_text(function.name) if function.name != nil else "<script>"
 		disassemble(&function.chunk, name)
 	}
 	return function
@@ -384,6 +384,17 @@ call :: proc(can_assign: bool) {
 	emit(.CALL, arg_count)
 }
 
+index :: proc(can_assign: bool) {
+	expression();
+	consume(.Right_Bracket, "Expected ']' after expression.")
+	if can_assign && match(.Equal) {
+		expression()
+		emit(.SET_ARRAY)
+	} else {
+		emit(.GET_ARRAY)
+	}
+}
+
 dot :: proc(can_assign: bool) {
 	consume(.Identifier, "Expected property name after '.'.")
 	id := identifier_constant(parser.previous)
@@ -426,6 +437,22 @@ string_ :: proc(can_assign: bool) {
 	s := parser.previous.text
 	val := intern_string(s[1:len(s) - 1])
 	emit_constant(val)
+}
+
+array :: proc(can_assign: bool) {
+	emit_constant(obj_create(Array))
+	n: u8
+	for {
+		if check(.Right_Bracket) {break}
+		expression()
+		if n == 255 {
+			error("Can't have more than 255 elements in array literal.")
+		}
+		n += 1
+		if !match(.Comma) {break}
+	}
+	consume(.Right_Bracket, "Expected ']'.")
+	emit(.ARRAY, n)
 }
 
 variable :: proc(can_assign: bool) {
@@ -485,6 +512,7 @@ rules := #partial [Token_Kind]Parse_Rule {
 	.Identifier    = { variable, nil,    .None       },
 	.String        = { string_,  nil,    .None       },
 	.Number        = { number,   nil,    .None       },
+	.Left_Bracket  = { array,    index,  .Call       },
 	.Dot           = { nil,      dot,    .Call       },
 	.Left_Paren    = { grouping, call,   .Call       },
 	.Minus         = { unary,    binary, .Term       },

@@ -25,6 +25,7 @@ Object_Variant :: union {
 	^Class,
 	^Instance,
 	^Bound_Method,
+	^Array,
 }
 
 String :: struct {
@@ -35,6 +36,7 @@ String :: struct {
 }
 
 string_text :: #force_inline proc "contextless" (s: ^String) -> string {
+	if s == nil {return ""}
 	#no_bounds_check return string(s.data[:s.len])
 }
 
@@ -85,6 +87,11 @@ Bound_Method :: struct {
 	method: ^Closure,
 }
 
+Array :: struct {
+	using obj: Object,
+	values: [dynamic]Value,
+}
+
 obj_create :: proc "contextless" ($T: typeid, extra := 0) -> ^T {
 	context = vm.ctx
 	ptr, err := mem.alloc(size_of(T) + extra, alignment = align_of(T))
@@ -126,6 +133,9 @@ obj_destroy :: proc(o: ^Object) {
 		table_destroy(&v.fields)
 		delete(mem.ptr_to_bytes(v))
 	case ^Bound_Method:
+		delete(mem.ptr_to_bytes(v))
+	case ^Array:
+		delete(v.values)
 		delete(mem.ptr_to_bytes(v))
 	}
 }
@@ -203,29 +213,48 @@ new_native :: proc "contextless" (arity: int, f: Native_Fn) -> ^Native {
 }
 
 obj_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+	fmt_function :: proc(fi: ^fmt.Info, f: ^Function) {
+		name := string_text(f.name)
+		if name == "" {
+			fi.n += fmt.wprintf(fi.writer, "<script>")
+		} else {
+			fi.n += fmt.wprintf(fi.writer, "<fun %s>", name)
+		}
+	}
+
 	context.allocator = vm.backing_allocator
 	o := arg.(^Object) or_return
 	if o == nil {
 		fmt.wprint(fi.writer, "nil")
 		return true
 	}
+
 	switch v in o.variant {
 	case ^String:
 		fmt.fmt_string(fi, string_text(v), verb)
 	case ^Function:
-		fi.n += fmt.wprintf(fi.writer, "<fun %s>", string_text(v.name))
+		fmt_function(fi, v)
+	case ^Closure:
+		fmt_function(fi, v.function)
+	case ^Bound_Method:
+		fmt_function(fi, v.method.function)
 	case ^Native:
 		fmt.fmt_string(fi, "<native>", verb)
-	case ^Closure:
-		fi.n += fmt.wprintf(fi.writer, "<fun %s>", string_text(v.function.name))
 	case ^Upvalue:
 		fmt.fmt_string(fi, "upvalue", verb)
 	case ^Class:
 		fi.n += fmt.wprintf(fi.writer, "class %s", string_text(v.name))
 	case ^Instance:
 		fi.n += fmt.wprintf(fi.writer, "%s instance", string_text(v.class.name))
-	case ^Bound_Method:
-		fi.n += fmt.wprintf(fi.writer, "<fun %s>", string_text(v.method.function.name))
+	case ^Array:
+		fi.n += fmt.wprint(fi.writer, '[')
+		for value, i in v.values {
+			if i != 0 {
+				fi.n += fmt.wprint(fi.writer, ", ")
+			}
+			fmt.fmt_value(fi, value, verb)
+		}
+		fi.n += fmt.wprint(fi.writer, ']')
 	case:
 		fi.n += fmt.wprintf(fi.writer, "CORRUPTED OBJECT at %p", rawptr(o))
 	}

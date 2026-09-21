@@ -42,6 +42,8 @@ disassemble_instruction :: proc(
 	     .NEGATE,
 	     .CLOSE_UPVALUE,
 	     .INHERIT,
+	     .SET_ARRAY,
+	     .GET_ARRAY,
 	     .PRINT:
 		new_offset = simple_instruction(op, offset)
 
@@ -81,6 +83,11 @@ disassemble_instruction :: proc(
 
 	case .INVOKE, .SUPER_INVOKE:
 		new_offset = invoke_instruction(ch, op, offset)
+
+	case .ARRAY:
+		n := ch.code[offset + 1]
+		fmt.printfln("%-16s % 4d", op, n)
+		new_offset = offset + 2
 
 	case:
 		fmt.printfln("Unknown opcode %d", op)

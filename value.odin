@@ -30,6 +30,8 @@ value_type :: proc "contextless" (value: Value) -> string {
 			return string_text(v.class.name)
 		case ^Bound_Method:
 			return "method"
+		case ^Array:
+			return "array"
 		}
 	}
 	return "nil"

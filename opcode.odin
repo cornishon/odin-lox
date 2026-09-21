@@ -38,4 +38,7 @@ Opcode :: enum u8 {
 	CLASS,
 	METHOD,
 	INHERIT,
+	ARRAY,
+	SET_ARRAY,
+	GET_ARRAY,
 }

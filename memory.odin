@@ -105,6 +105,10 @@ blacken_object :: proc(obj: ^Object) {
 	case ^Bound_Method:
 		mark_value(v.receiver)
 		mark_object(v.method)
+	case ^Array:
+		for value in v.values {
+			mark_value(value)
+		}
 	case ^String, ^Native:
 	}
 }
@@ -123,7 +127,7 @@ mark_object :: proc(o: ^Object) {
 	}
 	o.is_marked = true
 	switch v in o.variant {
-	case ^Function, ^Closure, ^Upvalue, ^Class, ^Instance, ^Bound_Method:
+	case ^Function, ^Closure, ^Upvalue, ^Class, ^Instance, ^Bound_Method, ^Array:
 		append(&vm.gray_stack, o)
 	case ^String, ^Native:
 	}

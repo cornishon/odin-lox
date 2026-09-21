@@ -28,6 +28,10 @@ scan_token :: proc(s: ^Scanner) -> Token {
 		return make_token(s, .Left_Brace)
 	case '}':
 		return make_token(s, .Right_Brace)
+	case '[':
+		return make_token(s, .Left_Bracket)
+	case ']':
+		return make_token(s, .Right_Bracket)
 	case ';':
 		return make_token(s, .Semicolon)
 	case ',':

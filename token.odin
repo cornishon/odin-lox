@@ -12,6 +12,8 @@ Token_Kind :: enum {
 	Right_Paren,
 	Left_Brace,
 	Right_Brace,
+	Left_Bracket,
+	Right_Bracket,
 	Comma,
 	Dot,
 	Minus,

@@ -179,35 +179,58 @@ call_value :: proc "contextless" (callee: Value, argc: int) -> bool {
 		case ^Instance:
 		case ^String:
 		case ^Upvalue:
+		case ^Array:
 		}
 	}
 	return runtime_error("Can only call functions and classes, but got: %v", value_type(callee))
 }
 
 invoke :: proc "contextless" (name: ^String, argc: int) -> bool {
-	receiver := peek(argc)
+	receiver, is_obj := peek(argc).(^Object)
+	if !is_obj {
+		return runtime_error("Can't invoke a method on a %v.", value_type(peek(argc)))
+	}
 
-	if str, is_str := value_as(String, receiver); is_str {
+	#partial switch v in receiver.variant {
+	case ^String:
 		switch string_text(name) {
 		case "length":
 			if argc != 0 {
 				return runtime_error("Expected 0 arguments but got %d.", argc)
 			}
-			vm.stack_top[-1] = f64(str.len)
+			vm.stack_top[-1] = f64(v.len)
 			return true
 		}
 		return runtime_error("Undefined property %q.", string_text(name))
-	}
 
-	if instance, ok := value_as(Instance, receiver); ok {
-		if value, was_field := table_get(&instance.fields, name); was_field {
+	case ^Array:
+		switch string_text(name) {
+		case "length":
+			if argc != 0 {
+				return runtime_error("Expected 0 arguments but got %d.", argc)
+			}
+			vm.stack_top[-1] = f64(len(v.values))
+			return true
+		case "push":
+			if argc != 1 {
+				return runtime_error("Expected 1 argument but got %d.", argc)
+			}
+			context = vm.ctx
+			append(&v.values, peek(0))
+			pop_()
+			return true
+		}
+		return runtime_error("Undefined property %q.", string_text(name))
+
+	case ^Instance:
+		if value, was_field := table_get(&v.fields, name); was_field {
 			vm.stack_top[-argc - 1] = value
 			return call_value(value, argc)
 		}
-		return invoke_from_class(instance.class, name, argc)
+		return invoke_from_class(v.class, name, argc)
 	}
 
-	return runtime_error("Only instances have methods.")
+	return runtime_error("Can't invoke a method on %v.", value_type(receiver))
 }
 
 invoke_from_class :: proc "contextless" (class: ^Class, name: ^String, argc: int) -> bool {
@@ -433,7 +456,7 @@ optable := [Opcode]Operation {
 		vm.stack_top = sp // gc
 		if table_set(&vm.globals, name, sp[-1]) {
 			table_remove(&vm.globals, name)
-			return runtime_error("Undefined variable '%s'", name)
+			return runtime_error("Undefined variable '%s'", string_text(name))
 		}
 		return #must_tail exec(sp[:], ip[2:], consts, locals, upvalues)
 	},
@@ -712,9 +735,45 @@ optable := [Opcode]Operation {
 	) -> bool {
 		name := value_as(String, consts[ip[1]])
 		v, ok := table_get(&vm.globals, name)
-		if !ok {return runtime_error("Undefined variable '%s'", name)}
+		if !ok {return runtime_error("Undefined variable '%s'", string_text(name))}
 		sp[0] = v
 		return #must_tail exec(sp[1:], ip[2:], consts, locals, upvalues)
+	},
+	.ARRAY = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
+		// stack: [Array][expr_0]...[expr_n]
+		n := int(ip[1])
+		arr := value_as(Array, sp[-n-1])
+		context = vm.ctx
+		append(&arr.values, ..sp[-n:0])
+		return #must_tail exec(sp[-n:], ip[2:], consts, locals, upvalues)
+	},
+	.GET_ARRAY = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
+		array, index := check_array_index(sp[-2], sp[-1]) or_return
+		sp[-2] = array.values[index]
+		return #must_tail exec(sp[-1:], ip[1:], consts, locals, upvalues)
+	},
+	.SET_ARRAY = proc "preserve/none" (
+		sp: [^]Value,
+		ip: [^]u8,
+		consts: [^]Value,
+		locals: [^]Value,
+		upvalues: [^]^Upvalue,
+	) -> bool {
+		array, index := check_array_index(sp[-3], sp[-2]) or_return
+		array.values[index] = sp[-1]
+		return #must_tail exec(sp[-2:], ip[1:], consts, locals, upvalues)
 	},
 }
 // odinfmt: enable
@@ -738,6 +797,21 @@ exec :: proc "preserve/none" (
 		fmt.printf("\n%v\n", Opcode(ip[0]))
 	}
 	return #must_tail optable[Opcode(ip[0])](sp, ip, consts, locals, upvalues)
+}
+
+check_array_index :: #force_inline proc "contextless" (av, iv: Value) -> (^Array, int, bool) {
+	array, is_array := value_as(Array, av)
+	if !is_array {
+		return nil, 0, runtime_error("Can only index arrays.")
+	}
+	index, is_num := iv.(f64)
+	if !is_num {
+		return nil, 0, runtime_error("Array index must be a number, but got: %s", value_type(iv))
+	}
+	if int(index) < 0 || int(index) >= len(array.values) {
+		return nil, 0, runtime_error("Array index %v out of range [%d, %d).", index, 0, len(array.values))
+	}
+	return array, int(index), true
 }
 
 unwrap_numbers :: #force_inline proc "contextless" (a, b: Value) -> (n, m: f64, ok: bool) {

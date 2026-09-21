@@ -1,0 +1,6 @@
+var xs = [1, 2, true, "foobar"];
+xs[1] = nil;
+xs.push("x").push("y");
+for (var i =  xs.length() - 1; i >= 0; i = i - 1) {
+	print xs[i];
+}
