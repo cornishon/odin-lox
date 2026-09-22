@@ -65,7 +65,7 @@ scan_token :: proc(s: ^Scanner) -> Token {
 	case 0:
 		return make_token(s, .Eof)
 	case:
-		return error_token(s, "Unexpected character.")
+		return make_token(s, .Invalid)
 	}
 }
 
@@ -82,14 +82,14 @@ find_matching :: proc(s: ^Scanner, $delim: byte) -> bool {
 
 scan_string :: proc(s: ^Scanner) -> Token {
 	if !find_matching(s, '"') {
-		return error_token(s, "Unterminated string.")
+		return make_token(s, .Unterminated)
 	}
 	return make_token(s, .String)
 }
 
 scan_rune :: proc(s: ^Scanner) -> Token {
 	if !find_matching(s, '\'') {
-		return error_token(s, "Unterminated character literal.")
+		return make_token(s, .Unterminated)
 	}
 	return make_token(s, .Rune)
 }
@@ -237,15 +237,9 @@ match :: proc(s: ^Scanner, expected: byte) -> bool {
 make_token :: proc(s: ^Scanner, kind: Token_Kind) -> Token {
 	return {
 		line = s.line,
+		offset = s.start,
 		kind = kind,
 		text = kind == .Eof ? "" : s.source[s.start:s.current],
 	}
 }
 
-error_token :: proc(s: ^Scanner, msg: string) -> Token {
-	return {
-		line = s.line,
-		kind = .Error,
-		text = msg,
-	}
-}

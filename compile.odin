@@ -101,43 +101,48 @@ current_chunk :: proc() -> ^Chunk {
 	return &current_compiler.function.chunk
 }
 
-error_at :: proc(token: Token, message: string) {
+error_at :: proc(token: Token, format: string, args: ..any) {
 	if parser.panic_mode {return}
 	parser.panic_mode = true
 	fmt.eprintf("[line %d] Error", token.line)
 	if token.kind == .Eof {
-		fmt.eprintf(" at end")
-	} else if token.kind == .Error {
-		// Nothing
+		fmt.eprintf(" at end: ")
 	} else {
-		fmt.eprintf(" at `%s`", token.text)
+		fmt.eprintf(" at `%s`: ", token.text)
 	}
-	fmt.eprintf(": %s\n", message)
+	fmt.eprintf(format, ..args)
+	fmt.eprintln()
 	parser.had_error = true
 }
 
-error :: proc(message: string) {
-	error_at(parser.previous, message)
+error :: proc(format: string, args: ..any) {
+	error_at(parser.previous, format, ..args)
 }
 
-error_at_current :: proc(message: string) {
-	error_at(parser.current, message)
+error_at_current :: proc(format: string, args: ..any) {
+	error_at(parser.current, format, ..args)
 }
 
 advance :: proc() {
 	parser.previous = parser.current
 	for {
 		parser.current = scan_token(&scanner)
-		if parser.current.kind != .Error {break}
-		error_at_current(parser.current.text)
+		#partial switch parser.current.kind {
+		case .Invalid:
+			error_at_current("Invalid character.")
+		case .Unterminated:
+			error_at_current("Missing closing %c.", scanner.source[parser.current.offset])
+		case:
+			return
+		}
 	}
 }
 
-consume :: proc(kind: Token_Kind, message: string) {
+consume :: proc(kind: Token_Kind, error_message: string, args: ..any) {
 	if parser.current.kind == kind {
 		advance()
 	} else {
-		error_at_current(message)
+		error_at_current(error_message, ..args)
 	}
 }
 
@@ -308,8 +313,8 @@ declare_variable :: proc() {
 	add_local(name)
 }
 
-parse_variable :: proc(error_message: string) -> u8 {
-	consume(.Identifier, error_message)
+parse_variable :: proc(error_message: string, args: ..any) -> u8 {
+	consume(.Identifier, error_message, ..args)
 	declare_variable()
 	if current_compiler.scope_depth > 0 {return 0}
 	return identifier_constant(parser.previous)

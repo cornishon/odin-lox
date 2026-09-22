@@ -4,6 +4,7 @@ Token :: struct {
 	kind: Token_Kind,
 	text: string,
 	line: u32,
+	offset: int,
 }
 
 Token_Kind :: enum {
@@ -55,6 +56,9 @@ Token_Kind :: enum {
 	True,
 	Var,
 	While,
-	Error,
+
+	// errors/eof
+	Unterminated,
+	Invalid,
 	Eof,
 }

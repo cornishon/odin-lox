@@ -317,7 +317,7 @@ runtime_error :: proc "contextless" (format: string, args: ..any) -> bool {
 		if i == 0 {
 			fmt.eprintln("<script>")
 		} else {
-			fmt.eprintfln("%s()", fun.name)
+			fmt.eprintfln("%s()", string_text(fun.name))
 		}
 	}
 
