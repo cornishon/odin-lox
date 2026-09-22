@@ -56,6 +56,8 @@ scan_token :: proc(s: ^Scanner) -> Token {
 		return make_token(s, .Greater_Equal if (match(s, '=')) else .Greater)
 	case '"':
 		return scan_string(s)
+	case '\'':
+		return scan_rune(s)
 	case '0' ..= '9':
 		return scan_number(s)
 	case 'a' ..= 'z', 'A' ..= 'Z', '_':
@@ -67,13 +69,29 @@ scan_token :: proc(s: ^Scanner) -> Token {
 	}
 }
 
-scan_string :: proc(s: ^Scanner) -> Token {
-	for s.current < len(s.source) && advance(s) != '"' {
+find_matching :: proc(s: ^Scanner, $delim: byte) -> bool {
+	#assert(delim != '\\')
+	for s.current < len(s.source) {
+		switch advance(s) {
+		case '\\': advance(s)
+		case delim: return true
+		}
 	}
-	if s.current == len(s.source) {
+	return false
+}
+
+scan_string :: proc(s: ^Scanner) -> Token {
+	if !find_matching(s, '"') {
 		return error_token(s, "Unterminated string.")
 	}
 	return make_token(s, .String)
+}
+
+scan_rune :: proc(s: ^Scanner) -> Token {
+	if !find_matching(s, '\'') {
+		return error_token(s, "Unterminated character literal.")
+	}
+	return make_token(s, .Rune)
 }
 
 scan_number :: proc(s: ^Scanner) -> Token {

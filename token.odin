@@ -36,6 +36,7 @@ Token_Kind :: enum {
 	Identifier,
 	String,
 	Number,
+	Rune,
 
 	// Keywords.
 	And,

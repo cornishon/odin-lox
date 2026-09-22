@@ -110,7 +110,7 @@ error_at :: proc(token: Token, message: string) {
 	} else if token.kind == .Error {
 		// Nothing
 	} else {
-		fmt.eprintf(" at '%s'", token.text)
+		fmt.eprintf(" at `%s`", token.text)
 	}
 	fmt.eprintf(": %s\n", message)
 	parser.had_error = true
@@ -420,7 +420,7 @@ literal :: proc(can_assign: bool) {
 	case .False: emit(.FALSE)
 	case .True:  emit(.TRUE)
 	case .Nil:   emit(.NIL)
-	case: fmt.panicf("Unhandled literal token: %v", k)
+	case: fmt.panicf("Unhandled literal token: %v.", k)
 	}
 	// odinfmt: enable
 }
@@ -428,15 +428,27 @@ literal :: proc(can_assign: bool) {
 number :: proc(can_assign: bool) {
 	value, ok := strconv.parse_f64(parser.previous.text)
 	if !ok {
-		error("Invalid number literal")
+		error("Invalid number literal.")
 	}
 	emit_constant(value)
 }
 
+char :: proc(can_assign: bool) {
+	r, _, tail, ok := strconv.unquote_char(parser.previous.text[1:], '\'')
+	if !ok || tail != "'" {
+		error("Invalid character literal.")
+	}
+	emit_constant(f64(r))
+}
+
 string_ :: proc(can_assign: bool) {
 	s := parser.previous.text
-	val := intern_string(s[1:len(s) - 1])
-	emit_constant(val)
+	res, allocated, ok := strconv.unquote_string(s, vm.backing_allocator)
+	defer if allocated {delete(res, vm.backing_allocator)}
+	if !ok {
+		error("Invalid string literal.")
+	}
+	emit_constant(intern_string(res))
 }
 
 array :: proc(can_assign: bool) {
@@ -512,6 +524,7 @@ rules := #partial [Token_Kind]Parse_Rule {
 	.Identifier    = { variable, nil,    .None       },
 	.String        = { string_,  nil,    .None       },
 	.Number        = { number,   nil,    .None       },
+	.Rune          = { char,     nil,    .None       },
 	.Left_Bracket  = { array,    index,  .Call       },
 	.Dot           = { nil,      dot,    .Call       },
 	.Left_Paren    = { grouping, call,   .Call       },

@@ -60,6 +60,17 @@ vm_init :: proc(stdout: io.Writer, backing_allocator := context.allocator) {
 	vm.next_gc = 1024 * 1024
 	vm.stdout = stdout
 
+	define_native("putchar", 1, proc "contextless" (args: []Value) -> (Value, bool) {
+		r, ok := args[0].(f64)
+		if ok {
+			context = vm.ctx
+			fmt.wprint(vm.stdout, rune(r))
+		} else {
+			runtime_error("Argument must be a valid codepoint.")
+		}
+		return nil, ok
+	})
+
 	define_native("clock", 0, proc "contextless" (args: []Value) -> (Value, bool) {
 		clock := f64(time.tick_now()._nsec) / 1e9
 		return clock, true
