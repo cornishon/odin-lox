@@ -17,6 +17,8 @@ lox_allocator :: proc "contextless" () -> mem.Allocator {
 }
 
 collect_garbage :: proc() {
+	if vm.disable_gc {return}
+
 	when DEBUG_LOG_GC {
 		fmt.print("\n-- gc begin\n")
 		before := vm.bytes_allocated

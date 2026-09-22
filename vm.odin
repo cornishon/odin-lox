@@ -22,6 +22,7 @@ vm: struct {
 	ctx: runtime.Context,
 
 	// gc
+	disable_gc: bool,
 	bytes_allocated: int,
 	next_gc: int,
 	backing_allocator: mem.Allocator,
@@ -204,34 +205,10 @@ invoke :: proc "contextless" (name: ^String, argc: int) -> bool {
 
 	#partial switch v in receiver.variant {
 	case ^String:
-		switch string_text(name) {
-		case "length":
-			if argc != 0 {
-				return runtime_error("Expected 0 arguments but got %d.", argc)
-			}
-			vm.stack_top[-1] = f64(v.len)
-			return true
-		}
-		return runtime_error("Undefined property %q.", string_text(name))
+		return invoke_from_class(string_class(), name, argc)
 
 	case ^Array:
-		switch string_text(name) {
-		case "length":
-			if argc != 0 {
-				return runtime_error("Expected 0 arguments but got %d.", argc)
-			}
-			vm.stack_top[-1] = f64(len(v.values))
-			return true
-		case "push":
-			if argc != 1 {
-				return runtime_error("Expected 1 argument but got %d.", argc)
-			}
-			context = vm.ctx
-			append(&v.values, peek(0))
-			pop_()
-			return true
-		}
-		return runtime_error("Undefined property %q.", string_text(name))
+		return invoke_from_class(array_class(), name, argc)
 
 	case ^Instance:
 		if value, was_field := table_get(&v.fields, name); was_field {
@@ -246,8 +223,18 @@ invoke :: proc "contextless" (name: ^String, argc: int) -> bool {
 
 invoke_from_class :: proc "contextless" (class: ^Class, name: ^String, argc: int) -> bool {
 	if val, ok := table_get(&class.methods, name); ok {
-		method := value_as(Closure, val)
-		return call_closure(method, argc)
+		if method, is_closure := value_as(Closure, val); is_closure {
+			return call_closure(method, argc)
+		} else {
+			method, is_native := value_as(Native, val)
+			if !is_native {
+				panic_contextless("method is neither a closure nor a native!")
+			}
+			result := method.call(vm.stack_top[-argc - 1:0]) or_return
+			vm.stack_top = vm.stack_top[-argc - 1:]
+			push(result)
+			return true
+		}
 	}
 	return runtime_error("Undefined property %q.", string_text(name))
 }

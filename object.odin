@@ -140,6 +140,55 @@ obj_destroy :: proc(o: ^Object) {
 	}
 }
 
+string_class :: proc "contextless" () -> ^Class {
+	@(static) class: ^Class
+	if class != nil {return class}
+
+	vm.disable_gc = true
+	defer vm.disable_gc = false
+
+	class = new_class(intern_string("String"))
+	table_set(&vm.globals, class.name, class)
+
+	table_set(&class.methods, intern_string("length"),
+		new_native(1, proc "contextless" (args: []Value) -> (Value, bool) {
+			str := value_as(String, args[0])
+			return f64(str.len), true
+		}),
+	)
+
+	return class
+}
+
+array_class :: proc "contextless" () -> ^Class {
+	@(static) class: ^Class
+	if class != nil {return class}
+
+	vm.disable_gc = true
+	defer vm.disable_gc = false
+
+	class = new_class(intern_string("Array"))
+	table_set(&vm.globals, class.name, class)
+
+	table_set(&class.methods, intern_string("length"),
+		new_native(1, proc "contextless" (args: []Value) -> (Value, bool) {
+			array := value_as(Array, args[0])
+			return f64(len(array.values)), true
+		}),
+	)
+
+	table_set(&class.methods, intern_string("push"),
+		new_native(2, proc "contextless" (args: []Value) -> (Value, bool) {
+			array := value_as(Array, args[0])
+			context = vm.ctx
+			append(&array.values, args[1])
+			return array, true
+		}),
+	)
+
+	return class
+}
+
 intern_string :: proc "contextless" (text: string, tail: string = "") -> ^String {
 	h := hash.fnv32a(transmute([]u8)text)
 	h = hash.fnv32a(transmute([]u8)tail, h)
