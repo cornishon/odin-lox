@@ -223,10 +223,10 @@ invoke :: proc "contextless" (name: ^String, argc: int) -> bool {
 
 invoke_from_class :: proc "contextless" (class: ^Class, name: ^String, argc: int) -> bool {
 	if val, ok := table_get(&class.methods, name); ok {
-		if method, is_closure := value_as(Closure, val); is_closure {
+		if method, is_closure := value_is(Closure, val); is_closure {
 			return call_closure(method, argc)
 		} else {
-			method, is_native := value_as(Native, val)
+			method, is_native := value_is(Native, val)
 			if !is_native {
 				panic_contextless("method is neither a closure nor a native!")
 			}
@@ -485,7 +485,7 @@ optable := [Opcode]Operation {
 		locals: [^]Value,
 		upvalues: [^]^Upvalue,
 	) -> bool {
-		instance, is_inst := value_as(Instance, sp[-1])
+		instance, is_inst := value_is(Instance, sp[-1])
 		if !is_inst {
 			return runtime_error("Only instances have properties.")
 		}
@@ -505,7 +505,7 @@ optable := [Opcode]Operation {
 		locals: [^]Value,
 		upvalues: [^]^Upvalue,
 	) -> bool {
-		instance, is_inst := value_as(Instance, sp[-2])
+		instance, is_inst := value_is(Instance, sp[-2])
 		if !is_inst {return runtime_error("Only instances have properties.")}
 		name := value_as(String, consts[ip[1]])
 		vm.stack_top = sp // gc
@@ -652,8 +652,8 @@ optable := [Opcode]Operation {
 		locals: [^]Value,
 		upvalues: [^]^Upvalue,
 	) -> bool {
-		if b, b_ok := value_as(String, sp[-1]); b_ok {
-			if a, a_ok := value_as(String, sp[-2]); a_ok {
+		if b, b_ok := value_is(String, sp[-1]); b_ok {
+			if a, a_ok := value_is(String, sp[-2]); a_ok {
 				context = vm.ctx
 				vm.stack_top = sp // gc
 				sp[-2] = intern_string(string_text(a), string_text(b))
@@ -717,7 +717,7 @@ optable := [Opcode]Operation {
 		locals: [^]Value,
 		upvalues: [^]^Upvalue,
 	) -> bool {
-		superclass, is_class := value_as(Class, sp[-2])
+		superclass, is_class := value_is(Class, sp[-2])
 		if !is_class {return runtime_error("Superclass must be a class.")}
 		subclass := value_as(Class, sp[-1])
 		vm.stack_top = sp // gc
@@ -798,7 +798,7 @@ exec :: proc "preserve/none" (
 }
 
 check_array_index :: #force_inline proc "contextless" (av, iv: Value) -> (^Array, int, bool) {
-	array, is_array := value_as(Array, av)
+	array, is_array := value_is(Array, av)
 	if !is_array {
 		return nil, 0, runtime_error("Can only index arrays.")
 	}

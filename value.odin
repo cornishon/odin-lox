@@ -37,12 +37,16 @@ value_type :: proc "contextless" (value: Value) -> string {
 	return "nil"
 }
 
-value_as :: proc "contextless" ($T: typeid, value: Value) -> (^T, bool) #optional_ok {
+value_is :: proc "contextless" ($T: typeid, value: Value) -> (^T, bool) {
 	#partial switch v in value {
 	case ^Object:
 		return v.variant.(^T)
 	}
 	return nil, false
+}
+
+value_as :: proc "contextless" ($T: typeid, value: Value) -> ^T {
+	return value.(^Object).variant.(^T)
 }
 
 value_is_falsey :: proc "contextless" (value: Value) -> bool {
